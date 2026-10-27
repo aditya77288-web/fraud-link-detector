@@ -1,0 +1,6 @@
+{
+  "name": "Fraud Link Detector",
+  "description": "Assess suspicious URLs received through WhatsApp, SMS, Telegram, email, and messaging platforms before clicking.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
