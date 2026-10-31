@@ -113,6 +113,29 @@ export function createRateLimiter(maxRequests = 60, windowMs = 60000) {
     const clientRecord = clients.get(clientIp);
 
     if (!clientRecord || now > clientRecord.resetTime) {
+      if (clients.size >= 10000) {
+        // 1. Purge expired client records first
+        for (const [ip, record] of clients.entries()) {
+          if (now > record.resetTime) {
+            clients.delete(ip);
+          }
+        }
+        // 2. If still at capacity, evict unblocked entries (count < maxRequests) to protect active rate-limit bans
+        if (clients.size >= 10000) {
+          for (const [ip, record] of clients.entries()) {
+            if (record.count < maxRequests) {
+              clients.delete(ip);
+              if (clients.size < 9000) break;
+            }
+          }
+        }
+        // 3. Strict bound fallback: evict oldest entry to prevent unbounded memory growth
+        while (clients.size >= 10000) {
+          const oldestKey = clients.keys().next().value;
+          if (!oldestKey) break;
+          clients.delete(oldestKey);
+        }
+      }
       clients.set(clientIp, { count: 1, resetTime: now + windowMs });
       return next();
     }

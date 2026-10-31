@@ -1,0 +1,30 @@
+{
+  "id": "/",
+  "name": "Fraud Link Detector",
+  "short_name": "FraudLink",
+  "description": "Assess suspicious URLs received through WhatsApp, SMS, Telegram, and messaging platforms before clicking.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "theme_color": "#0b1120",
+  "background_color": "#0b1120",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "192x192 512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "share_target": {
+    "action": "/",
+    "method": "GET",
+    "enctype": "application/x-www-form-urlencoded",
+    "params": {
+      "title": "title",
+      "text": "text",
+      "url": "url"
+    }
+  }
+}

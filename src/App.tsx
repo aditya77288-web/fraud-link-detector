@@ -16,6 +16,8 @@ import {
 import { ThreatIntelligenceState } from './types/threat';
 import { ReconClientState } from './types/recon';
 import { RedirectClientState } from './types/redirect';
+import { parseShareTargetParams, cleanShareQueryParams } from './utils/shareTarget';
+import { DetectedCandidate } from './components/UrlInputSection';
 
 export default function App() {
   const [inputUrl, setInputUrl] = useState('');
@@ -25,10 +27,32 @@ export default function App() {
   const [threatState, setThreatState] = useState<ThreatIntelligenceState>({ status: 'idle' });
   const [reconState, setReconState] = useState<ReconClientState>({ status: 'idle', data: null });
   const [redirectState, setRedirectState] = useState<RedirectClientState>({ status: 'idle', data: null });
+  const [incomingCandidate, setIncomingCandidate] = useState<DetectedCandidate | null>(null);
 
-  // Load existing scan history from localStorage on initial render
+  // Load existing scan history from localStorage and inspect Web Share Target params on initial render
   useEffect(() => {
     setHistory(loadScanHistory());
+
+    // Handle incoming Web Share Target parameters (url, text, title)
+    if (typeof window !== 'undefined' && window.location.search) {
+      const params = new URLSearchParams(window.location.search);
+      const shareResult = parseShareTargetParams(params);
+      if (shareResult.hasShare) {
+        // Sanitize address bar to prevent re-processing on refresh
+        cleanShareQueryParams();
+
+        if (shareResult.urls.length > 0 && shareResult.primaryUrl) {
+          // Pre-fill input field per user configuration
+          setInputUrl(shareResult.primaryUrl);
+          // Prompt user confirmation before initiating any scan
+          setIncomingCandidate({
+            urls: shareResult.urls,
+            primaryUrl: shareResult.primaryUrl,
+            source: 'share',
+          });
+        }
+      }
+    }
   }, []);
 
   const executeScan = (urlToScan: string) => {
@@ -162,8 +186,12 @@ export default function App() {
     }, 150);
   };
 
-  const handleScan = () => {
-    executeScan(inputUrl);
+  const handleScan = (urlToScan?: string) => {
+    const target =
+      typeof urlToScan === 'string' && urlToScan.trim()
+        ? urlToScan.trim()
+        : inputUrl;
+    executeScan(target);
   };
 
   const handleClear = () => {
@@ -200,7 +228,7 @@ export default function App() {
             Suspicious Link Inspection
           </h2>
           <p className="text-sm sm:text-base text-slate-400 mt-2 leading-relaxed">
-            Safely examine suspicious links received on messaging platforms like WhatsApp, Telegram, SMS, or Email without triggering malicious payloads or sending data to third parties.
+            Safely examine suspicious links received on messaging platforms like WhatsApp, Telegram, SMS, or Email without triggering client-side exploits or navigating to untrusted destinations on your device.
           </p>
         </div>
 
@@ -211,6 +239,8 @@ export default function App() {
           onScan={handleScan}
           onClear={handleClear}
           isScanning={isScanning}
+          incomingCandidate={incomingCandidate}
+          onDismissIncomingCandidate={() => setIncomingCandidate(null)}
         />
 
         {/* 3. Results Section ("Scan Results", initially "Paste a URL above to begin your security check.") */}
@@ -239,7 +269,7 @@ export default function App() {
       <footer className="border-t border-slate-900/80 bg-slate-950/60 py-6 text-center text-xs text-slate-500">
         <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-3">
           <p>Fraud Link Detector · Client-Side Security Assessment</p>
-          <p>URLs are never stored on external servers or transmitted.</p>
+          <p>Client-side heuristic analysis runs locally. Cloud lookups are queried on demand.</p>
         </div>
       </footer>
     </div>

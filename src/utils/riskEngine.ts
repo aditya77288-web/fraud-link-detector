@@ -192,12 +192,15 @@ export function assessUrlRisk(parsed: ParsedUrlDetails | null): RiskAssessment {
   });
 
   if (matchedKeywords.length > 0) {
+    const isPathOnly = !lowerHostname.includes(matchedKeywords[0]) && lowerPathname.includes(matchedKeywords[0]);
     indicators.push({
       id: 'rule-abused-words',
       ruleNumber: 7,
-      name: 'Sensitive Keywords in Path or Host',
+      name: isPathOnly ? 'Contextual Sensitive Keywords in Path' : 'Sensitive Keywords in Path or Host',
       points: 20,
-      explanation: `Contains keywords commonly associated with authentication or financial lures: [${matchedKeywords.slice(0, 4).join(', ')}]`,
+      explanation: isPathOnly
+        ? `Contains contextual keywords ([${matchedKeywords.slice(0, 4).join(', ')}]) in the URL path commonly associated with authentication or account actions. This is a contextual indicator requiring domain verification, not proof of phishing.`
+        : `Contains keywords commonly associated with authentication or financial lures: [${matchedKeywords.slice(0, 4).join(', ')}]. Contextual indicator to verify destination identity.`,
       evidence: matchedKeywords.slice(0, 4).join(', '),
     });
   }
@@ -240,12 +243,16 @@ export function assessUrlRisk(parsed: ParsedUrlDetails | null): RiskAssessment {
   // Treats HTTP port 80 and HTTPS port 443 as standard defaults
   if (parsed.isNonStandardPort) {
     const standardPort = parsed.isHttps ? 'HTTPS (443)' : 'HTTP (80)';
+    const portNote =
+      parsed.explicitPort === '8080'
+        ? 'Port 8080 is an alternative/non-default HTTP web port commonly used for local development, caching proxies, or testing. Standard default ports are HTTP (80) and HTTPS (443). Its presence is a contextual indicator to verify the destination, not proof of malicious activity.'
+        : `Diverges from standard default web ports (HTTP (80) and HTTPS (443)). Non-standard ports warrant destination verification but do not prove malicious activity on their own.`;
     indicators.push({
       id: 'rule-unusual-port',
       ruleNumber: 10,
       name: 'Non-Standard Network Port',
       points: 15,
-      explanation: `Specifies non-standard port :${parsed.explicitPort} instead of default ${standardPort}, which may be used to host rogue or unauthorized services.`,
+      explanation: `Specifies non-standard port :${parsed.explicitPort} instead of default ${standardPort}. ${portNote}`,
       evidence: `Port :${parsed.explicitPort}`,
     });
   }

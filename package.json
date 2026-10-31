@@ -10,7 +10,7 @@
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
-    "test": "tsx --test src/utils/urlParser.test.ts src/utils/riskEngine.test.ts src/utils/historyStorage.test.ts src/server.test.ts src/utils/threatStates.test.ts src/server/dnsRecon.test.ts src/server/redirectInspector.test.ts"
+    "test": "tsx --test src/utils/urlParser.test.ts src/utils/riskEngine.test.ts src/utils/historyStorage.test.ts src/server.test.ts src/utils/threatStates.test.ts src/server/dnsRecon.test.ts src/server/redirectInspector.test.ts src/utils/clipboardUrl.test.ts src/utils/shareTarget.test.ts src/server/screenshotService.test.ts src/utils/warningEngine.test.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

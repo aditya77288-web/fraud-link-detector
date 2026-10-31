@@ -281,3 +281,32 @@ test('POST /api/redirect-chain: Rejects private RFC 1918 destination (192.168.1.
   assert.equal(data.status, 'BLOCKED_SPECIAL_USE_IP');
 });
 
+// 13. Security Headers and Cache-Control
+test('API Security Headers: Endpoints include protective headers and Cache-Control: no-store', async () => {
+  const response = await fetch(`${SERVER_BASE}/api/health`);
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('x-content-type-options'), 'nosniff');
+  assert.equal(response.headers.get('x-frame-options'), 'SAMEORIGIN');
+  assert.equal(response.headers.get('referrer-policy'), 'strict-origin-when-cross-origin');
+  assert.equal(response.headers.get('cache-control'), 'no-store');
+
+  const reconRes = await fetch(`${SERVER_BASE}/api/recon`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url: 'http://127.0.0.1/test' }),
+  });
+  assert.equal(reconRes.headers.get('x-content-type-options'), 'nosniff');
+  assert.equal(reconRes.headers.get('cache-control'), 'no-store');
+
+  // Verify error responses (HTTP 400) also carry Cache-Control: no-store
+  const errRes = await fetch(`${SERVER_BASE}/api/threat-check`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url: '' }),
+  });
+  assert.equal(errRes.status, 400);
+  assert.equal(errRes.headers.get('cache-control'), 'no-store');
+  assert.equal(errRes.headers.get('x-content-type-options'), 'nosniff');
+});
+
+

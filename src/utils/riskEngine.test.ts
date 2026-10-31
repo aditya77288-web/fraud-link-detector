@@ -30,6 +30,13 @@ test('Target Test Case 1: http://192.0.2.1:8080/login', () => {
   assert.ok(portIndicator);
   assert.ok(portIndicator.explanation.includes('8080'));
   assert.ok(portIndicator.explanation.includes('HTTP (80)'));
+  assert.ok(portIndicator.explanation.includes('HTTPS (443)'));
+  assert.ok(portIndicator.explanation.includes('not proof of malicious activity'));
+
+  // Verify sensitive path keyword explanation
+  const keywordIndicator = assessment.indicators.find((i) => i.ruleNumber === 7);
+  assert.ok(keywordIndicator);
+  assert.ok(keywordIndicator.explanation.includes('not proof of phishing'));
 });
 
 test('Target Test Case 2: https://example.com@192.0.2.1/login', () => {

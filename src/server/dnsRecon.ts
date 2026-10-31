@@ -32,6 +32,10 @@ export function isSpecialUseIpv4(ip: string): boolean {
   if (a === 192 && b === 168) return true;
   // 169.254.0.0/16 - Link-local
   if (a === 169 && b === 254) return true;
+  // 100.64.0.0/10 - Carrier-Grade NAT / Shared Address Space (RFC 6598)
+  if (a === 100 && b >= 64 && b <= 127) return true;
+  // 198.18.0.0/15 - Benchmarking (RFC 2544)
+  if (a === 198 && (b === 18 || b === 19)) return true;
   // 0.0.0.0/8 - Current network
   if (a === 0) return true;
   // 224.0.0.0/4 - Multicast (224.0.0.0 - 239.255.255.255)
@@ -43,7 +47,7 @@ export function isSpecialUseIpv4(ip: string): boolean {
 }
 
 /**
- * Checks whether an IPv6 address is in a reserved, private, loopback, or IPv4-mapped range.
+ * Checks whether an IPv6 address is in a reserved, private, loopback, or IPv4-mapped/compatible range.
  */
 export function isSpecialUseIpv6(ip: string): boolean {
   const normalized = ip.toLowerCase().trim();
@@ -51,13 +55,26 @@ export function isSpecialUseIpv6(ip: string): boolean {
   // Loopback (::1) and Unspecified (::)
   if (normalized === '::1' || normalized === '::') return true;
 
-  // IPv4-mapped IPv6: ::ffff:127.0.0.1 or ::ffff:7f00:1
-  if (normalized.startsWith('::ffff:') || normalized.startsWith('0:0:0:0:0:ffff:')) {
+  // IPv4-mapped or IPv4-compatible IPv6: e.g. ::ffff:127.0.0.1 or ::127.0.0.1
+  if (normalized.includes('.')) {
     const v4Part = normalized.split(':').pop() || '';
-    if (v4Part.includes('.')) {
-      return isSpecialUseIpv4(v4Part);
+    if (isSpecialUseIpv4(v4Part)) return true;
+    // If it contains a dot and maps to a valid public IPv4 address, do not treat as special-use
+    if (normalized.startsWith('::ffff:') || normalized.startsWith('0:0:0:0:0:ffff:') || normalized.startsWith('::')) {
+      return false;
     }
-    // Hex IPv4 representation e.g. 7f000001
+  }
+
+  // Hex-encoded IPv4-mapped IPv6: ::ffff:w.x.y.z in hex, e.g. ::ffff:7f00:1 (127.0.0.1)
+  if (normalized.startsWith('::ffff:') || normalized.startsWith('0:0:0:0:0:ffff:')) {
+    const hexSuffix = normalized.replace(/^.*ffff:/, '');
+    const hexParts = hexSuffix.split(':');
+    if (hexParts.length === 2 && hexParts.every((p) => /^[0-9a-f]{1,4}$/.test(p))) {
+      const high = parseInt(hexParts[0], 16);
+      const low = parseInt(hexParts[1], 16);
+      const v4 = `${(high >> 8) & 0xff}.${high & 0xff}.${(low >> 8) & 0xff}.${low & 0xff}`;
+      return isSpecialUseIpv4(v4);
+    }
     return true;
   }
 
@@ -520,29 +537,32 @@ export async function performFullRecon(
     performRdapLookup(hostname, fetchFn),
   ]);
 
-  // SSRF guard on resolved IP addresses: Check if resolved IPs are all private/loopback
+  // SSRF guard on resolved IP addresses: Check if ANY resolved IP is private/loopback
   const allIps = [...dnsData.aRecords, ...dnsData.aaaaRecords];
-  if (allIps.length > 0 && allIps.every((ip) => isSpecialUseIpv4(ip) || isSpecialUseIpv6(ip))) {
+  if (allIps.length > 0 && allIps.some((ip) => isSpecialUseIpv4(ip) || isSpecialUseIpv6(ip))) {
+    const hasPublicIp = allIps.some((ip) => !isSpecialUseIpv4(ip) && !isSpecialUseIpv6(ip));
     return {
       hostname,
       isIpAddress: false,
       isSpecialUse: true,
       dns: {
         ...dnsData,
-        message: 'Domain resolves exclusively to private or special-use addresses.',
+        message: hasPublicIp
+          ? 'Domain resolves to mixed addresses including private or special-use endpoints (potential DNS rebinding).'
+          : 'Domain resolves exclusively to private or special-use addresses.',
       },
       rdap: {
         status: 'skipped',
-        message: 'RDAP skipped: domain points exclusively to private infrastructure.',
+        message: 'RDAP skipped: domain points to private infrastructure.',
       },
       findings: [
         {
           id: 'recon-resolved-private',
           category: 'infrastructure',
           severity: 'warning',
-          title: 'Resolves Exclusively to Private Addresses',
+          title: hasPublicIp ? 'Resolves to Restricted / Private Address (DNS Rebinding Risk)' : 'Resolves Exclusively to Private Addresses',
           explanation:
-            'This domain resolves exclusively to internal loopback or RFC 1918 private IP addresses. Outbound requests are blocked.',
+            'This domain resolves to internal loopback, private network, or special-use IP addresses. Outbound requests are blocked.',
         },
       ],
       evaluatedAt: new Date().toISOString(),

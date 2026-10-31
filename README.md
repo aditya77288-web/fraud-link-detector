@@ -1,12 +1,12 @@
 # Fraud Link Detector
 
-[![Tests](https://img.shields.io/badge/tests-70%20passing-brightgreen.svg)](#testing--verification)
+[![Tests](https://img.shields.io/badge/tests-126%20passing-brightgreen.svg)](#testing--verification)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-blue.svg)](https://www.typescriptlang.org/)
 [![React](https://img.shields.io/badge/React-19.0-61dafb.svg)](https://react.dev/)
 [![Express](https://img.shields.io/badge/Express-4.21-lightgrey.svg)](https://expressjs.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-An open-source, full-stack cybersecurity investigation workbench for analyzing suspicious links, deceptive URLs, and phishing lures. **Fraud Link Detector** combines client-side deterministic URL heuristics with hardened server-side reconnaissance—including Google Safe Browsing intelligence, asynchronous DNS and RDAP registry telemetry, and an SSRF-hardened, hop-by-hop HTTP redirect chain inspector.
+An open-source, full-stack cybersecurity investigation workbench for analyzing suspicious links, deceptive URLs, and phishing lures. **Fraud Link Detector** combines client-side deterministic URL heuristics with hardened server-side reconnaissance—including Google Safe Browsing intelligence, asynchronous DNS and RDAP registry telemetry, an SSRF-hardened HTTP redirect chain inspector, an evidence-based Scam Awareness Warning Engine, and an on-demand cloud website screenshot preview.
 
 ---
 
@@ -24,11 +24,13 @@ An open-source, full-stack cybersecurity investigation workbench for analyzing s
   - [Stream Disposal & Resource Limiting](#stream-disposal--resource-limiting)
   - [Sensitive Data Sanitization & Redaction](#sensitive-data-sanitization--redaction)
 - [Local Heuristic Engine & Scoring Matrix](#local-heuristic-engine--scoring-matrix)
+- [Scam Awareness Warning Engine](#scam-awareness-warning-engine)
 - [API Reference](#api-reference)
 - [Visual Walkthrough](#visual-walkthrough)
 - [Installation & Getting Started](#installation--getting-started)
 - [Environment Configuration](#environment-configuration)
 - [Testing & Verification](#testing--verification)
+- [Application Limitations & Constraints](#application-limitations--constraints)
 - [Responsible Disclosure & Security Guarantees](#responsible-disclosure--security-guarantees)
 - [License](#license)
 
@@ -46,7 +48,7 @@ Phishing campaigns, credential theft portals, and malicious redirects represent 
 
 Standard endpoint defenses often classify links as binary "good or bad" without providing investigative context. Conversely, naive online URL inspectors frequently expose their own host infrastructure to **Server-Side Request Forgery (SSRF)**, **DNS rebinding attacks**, and **denial of service** by fetching untrusted target websites directly.
 
-**Fraud Link Detector** addresses this by providing layered, defense-in-depth telemetry without ever opening, rendering, or executing untrusted user-supplied web pages.
+**Fraud Link Detector** addresses this by providing layered, defense-in-depth telemetry without ever opening, rendering, or executing untrusted user-supplied web pages on the user's client machine.
 
 ---
 
@@ -58,15 +60,17 @@ Fraud Link Detector is designed as a hybrid client-server application:
 ┌────────────────────────────────────────────────────────────────────────┐
 │                        CLIENT LAYER (React 19)                         │
 │  - Instant, offline deterministic heuristic evaluation (0–100 score)   │
+│  - Scam Awareness Warning Engine (Categories A–G with plain English)   │
 │  - RFC 3986 URL parsing & authority/credential extraction              │
 │  - Redacted local scan history & category risk breakdown               │
+│  - Safe clipboard detection & Android Web Share Target confirmation    │
 └────────────────┬───────────────────┬───────────────────┬───────────────┘
                  │                   │                   │
       POST /api/threat-check    POST /api/recon     POST /api/redirect-chain
                  │                   │                   │
 ┌────────────────▼───────────────────▼───────────────────▼───────────────┐
 │                    BACKEND LAYER (Express 4 on Node.js)                │
-│  - In-memory rate limiting (60 req/min per IP)                         │
+│  - In-memory rate limiting (60 req/min for recon/threat, 15 for photo) │
 │  - Strict input validation & URL normalization                         │
 │  - Strips credentials from target authority prior to upstream dispatch │
 ├─────────────────────┬─────────────────────┬────────────────────────────┤
@@ -77,7 +81,11 @@ Fraud Link Detector is designed as a hybrid client-server application:
 │   fallback mode     │ - ICANN bootstrap   │ - Custom socket pinning    │
 │ - API key isolated  │   RDAP query        │ - Immediate socket destroy │
 │   on server         │ - Domain age parser │ - Protocol downgrade alert │
-└─────────────────────┴─────────────────────┴────────────────────────────┘
+├─────────────────────┴─────────────────────┴────────────────────────────┤
+│ Isolated Cloud Screenshot Service                                      │
+│ - Remote headless sandbox preview via Microlink API                    │
+│ - Pre-flight SSRF IP/host filtering, 8s timeout, 2MB buffer limit      │
+└────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Technology Stack
@@ -96,15 +104,21 @@ To ensure complete technical transparency, features are categorized into impleme
 
 - [x] **Local Deterministic Heuristic Engine**: Evaluates URLs in real-time in the browser across 10 distinct security rules without external dependencies.
 - [x] **Risk Scoring & Categorization**: Clamped 0–100 score mapped to explicit risk bands: Low (0–29), Medium (30–59), High (60–100).
+- [x] **Scam Awareness Warning Engine**: Produces evidence-based, plain-English findings across 7 security categories (Categories A–G), including threat confidence, severity, potential scam scenarios, and actionable advice.
+- [x] **Contextual Path-Keyword Classification**: Accurately distinguishes routine path terms (e.g., `/login`, `/verify`, `/banking`, `/wallet`) from genuine phishing indicators. Path keywords alone produce low-severity informational reminders rather than high-risk phishing claims, while strong evidence (embedded `@` authority credentials, confirmed Safe Browsing threats) is independently preserved.
 - [x] **Safe Browsing Threat Intelligence**: Optional Google Safe Browsing v4 API integration via server-side `POST /api/threat-check`. Operates in graceful unconfigured mode when `GOOGLE_SAFE_BROWSING_API_KEY` is not present.
 - [x] **DNS Reconnaissance**: Concurrent lookups of `A`, `AAAA`, and `MX` records with individual 3-second timeouts via `node:dns/promises`.
-- [x] **Domain Age & RDAP Analysis**: Automated query to ICANN bootstrap RDAP services to resolve domain registration age, registrar name, and creation timestamps.
+- [x] **Domain Age & RDAP Analysis**: Automated query to ICANN bootstrap RDAP services to resolve domain registration age, registrar name, and creation timestamps. Flags domains registered $\le 30$ days ago.
 - [x] **SSRF-Protected Redirect Chain Inspector**: Hop-by-hop redirect analysis (maximum 5 hops) using `HEAD` requests (with zero-body `GET` fallback).
 - [x] **DNS Rebinding & Connection Pinning**: Sockets explicitly pinned to pre-validated IP addresses via a custom HTTP/HTTPS agent lookup handler to eliminate Time-of-Check to Time-of-Use (TOCTOU) exploits.
 - [x] **Protocol Downgrade Detection**: Flags redirects transitioning from `https://` to insecure `http://`.
 - [x] **Sensitive Parameter Redaction**: Strips passwords, auth tokens, session IDs, and JWTs from local history storage and inspected hop locations.
-- [x] **In-Memory Rate Limiting**: Global sliding window protection (60 requests per minute per IP address).
-- [x] **Automated Test Suite**: 70 automated unit and integration tests covering parser logic, risk engine rules, SSRF bypasses, and API contracts.
+- [x] **In-Memory Rate Limiting**: Sliding-window protection (60 requests per minute for recon/redirects, 15 requests per minute for screenshots).
+- [x] **Clipboard URL Detection with User Confirmation**: Safe, on-demand clipboard inspection via "Check Clipboard" button and paste event interception. Prompts user confirmation before executing scans.
+- [x] **PWA Web Share Target (Android & Desktop)**: Receives shared suspicious links or message text from chat apps (WhatsApp, Telegram, SMS) with explicit candidate confirmation before analysis.
+- [x] **Isolated Cloud Website Screenshot**: Ephemeral cloud-rendered visual preview via external isolated sandbox (Microlink API) with local SSRF pre-flight blocking, 8-second global timeout, 2MB incremental stream ceiling, raster magic-bytes validation, and CDN privacy disclosure.
+- [x] **Privacy Labels & Layered Disclosures**: Header accurately presents `"Local URL Analysis"` and `"Privacy-Focused Processing"` badges, complemented by a dedicated Privacy Architecture card detailing all 5 processing layers.
+- [x] **Automated Test Suite**: 126 automated unit and integration tests covering parser logic, risk engine rules, warning engine classifications, SSRF bypasses, API contracts, clipboard parsing, share targets, and screenshot rendering.
 
 ### 2. Partially Implemented Features
 
@@ -113,10 +127,8 @@ To ensure complete technical transparency, features are categorized into impleme
 
 ### 3. Planned Features
 
-- [ ] **Clipboard Auto-Detection**: One-click URL inspection triggered automatically from system clipboard paste events.
-- [ ] **Native Mobile Web Share Target**: PWA share target integration allowing links from messaging applications to be routed directly to the detector.
 - [ ] **Visual Threat Card Export**: Exporting downloadable or shareable incident summary cards (PNG/PDF) for security operations and end-user education.
-- [ ] **Sandboxed DOM / Visual Comparison**: Headless, isolated browser screenshotting to compare brand logos against declared domains (deliberately omitted from current backend to maintain zero attack surface).
+- [ ] **Heuristic Phishing Logo Matching**: Perceptual hash comparison of rendered website favicons against high-profile login portals.
 
 ---
 
@@ -159,7 +171,7 @@ The underlying TCP socket connects directly to the pre-screened IP address while
 To prevent memory exhaustion, slowloris attacks, or downloading malicious payloads:
 - Requests default to `HEAD`.
 - When fallback to `GET` is required, the response stream is resumed and immediately aborted (`req.destroy()`, `res.resume()`).
-- No response bodies are buffered into memory.
+- No response bodies are buffered into memory during redirect inspection.
 - Per-hop timeout is hard-capped at 2 seconds; cumulative chain timeout is capped at 6 seconds.
 - Chain depth is limited to a strict maximum of 5 hops.
 
@@ -183,15 +195,32 @@ The client-side scanner evaluates URLs against 10 deterministic structural heuri
 | **Excessive URL Length** | +15 | Total character length exceeding 100 characters; often used to push malicious domains outside mobile address bars. |
 | **Deep Subdomain Nesting** | +15 | Subdomain count &ge; 3; frequently observed in phishing kits imitating legitimate hierarchy. |
 | **Known URL Shortener** | +20 | Domains such as `bit.ly`, `tinyurl.com`, `t.co` used to obfuscate final destinations. |
-| **Suspicious Path / Host Keywords** | +20 | Presence of high-risk keywords (`login`, `verify`, `banking`, `security`, `update`, `wallet`, `2fa`, etc.). |
+| **Suspicious Path / Host Keywords** | +20 | Presence of high-risk keywords (`login`, `verify`, `banking`, `security`, `update`, `wallet`, `2fa`, etc.). Path keywords alone are classified as contextual indicators. |
 | **Suspicious Query Parameters** | +15 | Query strings containing credential harvesting flags (`redirect`, `return`, `token`, `password`). |
 | **Punycode / IDN Homograph** | +25 | Host labels starting with `xn--`, indicating internationalized character sets commonly exploited in homograph attacks. |
-| **Non-Standard Port** | +15 | Specified ports other than standard default web ports (Port 80 for HTTP, Port 443 for HTTPS). |
+| **Non-Standard Port** | +15 | Specified ports other than standard default web ports (Port 80 for HTTP, Port 443 for HTTPS). Port 8080 is explained as an alternative HTTP port without assuming malice. |
 
 ### Risk Categorization & Baseline Rules
 - **Low Risk (0–29)**: Minimal suspicious indicators. Displayed with explicit clarification: *"No obvious suspicious patterns detected. This does not guarantee the URL is safe."*
 - **Medium Risk (30–59)**: Multiple cautionary signals detected; warrants investigative caution.
 - **High Risk (60–100)**: Critical threat indicators detected (e.g. Punycode + Direct IP + Embedded Auth).
+
+---
+
+## Scam Awareness Warning Engine
+
+Fraud Link Detector includes an evidence-based **Scam Awareness Warning Engine** (`src/utils/warningEngine.ts`) that transforms structural observations and backend telemetry into actionable, plain-English advice.
+
+### Security Warning Categories
+1. **Known Threat (`known_threat`)**: Triggered when Google Safe Browsing confirms active malware or social engineering (Severity: `critical`, Confidence: `confirmed`).
+2. **Phishing & Credential Theft (`phishing_credential_theft`)**:
+   - *Strong Evidence*: Authority credentials before `@`, brand spoofing in subdomains, or confirmed threat matches produce high/critical severity warnings.
+   - *Contextual Path Keywords*: Common authentication terms in paths (e.g., `/login`, `/verify`, `/banking`, `/wallet`) without host spoofing or authority credentials produce low-severity, informational findings (`warn-contextual-keywords`). These remind users to confirm the destination domain rather than asserting proof of phishing.
+3. **Suspicious Redirect Behaviour (`suspicious_redirect`)**: Flags redirect loops, protocol downgrades, and excessive hops.
+4. **New Domain Registration (`new_domain`)**: Flags domains registered $\le 30$ days ago based on RDAP registration records.
+5. **Suspicious URL Structure (`suspicious_url_structure`)**: Flags direct numeric IPs, Punycode hostnames, and non-standard web ports.
+6. **Inconclusive / Unavailable External Checks (`inconclusive_check`)**: Surfaces when threat feeds or RDAP registries are offline or unconfigured, explicitly noting that unavailable checks must never be interpreted as clean results.
+7. **No Obvious Threats Detected (`no_obvious_threat`)**: Rendered when no heuristic rules are triggered, accompanied by a prominent non-guarantee disclaimer.
 
 ---
 
@@ -284,20 +313,6 @@ Content-Type: application/json
       "severity": "neutral",
       "title": "Established Domain Age",
       "explanation": "Domain was registered 11396 days ago (~31.2 years ago). Well-established domains are historically less likely to be ephemeral phishing lures, but domain longevity does not guarantee safety."
-    },
-    {
-      "id": "recon-dns-resolved",
-      "category": "dns",
-      "severity": "info",
-      "title": "Active DNS Resolution",
-      "explanation": "Domain resolves to 1 IPv4 endpoint(s) and 1 IPv6 endpoint(s)."
-    },
-    {
-      "id": "recon-mx-missing",
-      "category": "dns",
-      "severity": "neutral",
-      "title": "No Mail Exchange (MX) Records",
-      "explanation": "No MX records were found for this domain. Many legitimate web-only services do not configure email routing; missing MX records do not indicate malicious intent."
     }
   ],
   "evaluatedAt": "2026-10-26T20:50:00.000Z"
@@ -355,12 +370,6 @@ Content-Type: application/json
       "severity": "info",
       "title": "URL Shortener Detected",
       "description": "Hop 1 uses known link shortener service (bit.ly)."
-    },
-    {
-      "id": "domain-change-1",
-      "severity": "info",
-      "title": "Domain Transition",
-      "description": "Redirect transferred from bit.ly to example.com."
     }
   ],
   "inspectedAt": "2026-10-26T20:50:00.000Z"
@@ -369,10 +378,36 @@ Content-Type: application/json
 
 ---
 
+### 5. Isolated Cloud Website Screenshot Preview
+```http
+POST /api/screenshot
+Content-Type: application/json
+```
+**Request Body:**
+```json
+{
+  "url": "https://example.com"
+}
+```
+**Response (Success - 200 OK):**
+```json
+{
+  "status": "success",
+  "imageDataUri": "data:image/jpeg;base64,...",
+  "capturedAt": "2026-10-26T20:50:00.000Z",
+  "viewport": {
+    "width": 1280,
+    "height": 800
+  }
+}
+```
+
+---
+
 ## Visual Walkthrough
 
 ### 1. Main Dashboard (Pre-Scan State)
-The primary landing interface prior to analysis, highlighting the URL input form, platform safety tips, and client-side zero-telemetry privacy guarantee.
+The primary landing interface prior to analysis, highlighting the URL input form, platform safety tips, and privacy badges (`"Local URL Analysis"` and `"Privacy-Focused Processing"`).
 
 ![Main Application Interface](docs/screenshots/dashboard-overview.png)
 
@@ -415,22 +450,30 @@ Copy the example environment configuration:
 ```bash
 cp .env.example .env
 ```
-*(Google Safe Browsing is optional. The application functions out-of-the-box in local heuristic mode if no API key is provided).*
+*(All features function out-of-the-box in local heuristic mode if no API key is provided).*
 
 ### 4. Start Development Server
 ```bash
 npm run dev
 ```
-The application will start on `http://localhost:3000` with the Express API and Vite middleware running concurrently.
+Starts `tsx server.ts` with the Express API and Vite development middleware running on `http://localhost:3000`.
 
 ### 5. Production Build & Execution
 ```bash
-# Build the production Vite bundle
+# Build the production Vite bundle to dist/
 npm run build
 
 # Launch the production Express server
 npm run start
 ```
+
+### Available NPM Scripts
+- `npm run dev`: Starts the local development server with Vite middleware (`tsx server.ts`).
+- `npm run build`: Compiles production frontend bundle to `dist/` (`vite build`).
+- `npm run start`: Runs production server with pre-built static assets (`NODE_ENV=production tsx server.ts`).
+- `npm run lint`: Performs TypeScript type checking (`tsc --noEmit`).
+- `npm test`: Runs all 126 automated unit and integration tests (`tsx --test ...`).
+- `npm run clean`: Cleans build output directories (`rm -rf dist server.js`).
 
 ---
 
@@ -438,19 +481,21 @@ npm run start
 
 Configuration variables defined in `.env.example`:
 
-| Variable | Required | Description |
-|:---|:---:|:---|
-| `PORT` | Optional | Backend HTTP listener port (defaults to `3000`). |
-| `NODE_ENV` | Optional | Runtime environment (`development` or `production`). |
-| `GOOGLE_SAFE_BROWSING_API_KEY` | Optional | API key for Google Safe Browsing Lookup API v4. If omitted, the app marks Safe Browsing as unconfigured and continues running local heuristics and reconnaissance. |
+| Variable | Required | Default | Feature Dependency & Behavioral Effect |
+|:---|:---:|:---:|:---|
+| `PORT` | Optional | `3000` | HTTP port on which the Express server listens. |
+| `NODE_ENV` | Optional | `development` | Set to `production` when running the pre-compiled bundle from `dist/`. |
+| `TRUST_PROXY` | Optional | `1` | Controls Express reverse-proxy trust (`app.set('trust proxy', ...)`). Essential for accurate client IP identification under Cloud Run, Nginx, or load balancers to enforce per-IP rate limits. |
+| `GOOGLE_SAFE_BROWSING_API_KEY` | Optional | None | API key for Google Safe Browsing Lookup API v4 (`threatMatches:find`). If omitted, `/api/threat-check` returns `configured: false`, and the application runs in offline structural heuristic mode. |
+| `SCREENSHOT_API_KEY` | Optional | None | API key for external screenshot rendering via Microlink API. If omitted, the server uses Microlink's public free-tier. |
 
-> **Security Note**: Never commit real API keys or `.env` files containing secrets to version control.
+> **Security Note**: Never commit actual API keys or `.env` files containing secrets to version control.
 
 ---
 
 ## Testing & Verification
 
-The project includes a comprehensive automated test suite leveraging Node.js's native test runner (`node:test`) executed via `tsx`:
+The project includes an automated test suite leveraging Node.js's native test runner (`node:test`) executed via `tsx`:
 
 ```bash
 # Run all automated tests
@@ -464,21 +509,39 @@ npm run build
 ```
 
 ### Verified Test Suite Summary
-All 70 automated tests pass across 7 dedicated test specifications:
-- `src/utils/urlParser.test.ts`: RFC 3986 normalization, authority credential handling, Punycode parsing, port differentiation.
-- `src/utils/riskEngine.test.ts`: Deterministic scoring rules, threshold clamping, edge-case heuristic triggers.
-- `src/utils/historyStorage.test.ts`: Local storage persistence, LRU bounds, token and credential redaction.
-- `src/utils/threatStates.test.ts`: Exact messaging contracts for Clean, Threat, Unconfigured, and Unavailable states.
-- `src/server.test.ts`: Express rate limiter, CORS policies, health check, and threat check route handling.
-- `src/server/dnsRecon.test.ts`: Asynchronous DNS lookups, RDAP bootstrap queries, timeouts, and private IP isolation.
-- `src/server/redirectInspector.test.ts`: Multi-hop redirect limits, protocol downgrade alerts, SSRF defenses, loopback blocks, and connection pinning.
+All **126 automated tests pass** across **11 dedicated test specifications**:
+- `src/utils/urlParser.test.ts` (6 tests): RFC 3986 normalization, default ports, authority credential handling, Punycode parsing.
+- `src/utils/riskEngine.test.ts` (8 tests): Deterministic scoring rules, threshold clamping, edge-case heuristic triggers.
+- `src/utils/historyStorage.test.ts` (4 tests): Local storage persistence, LRU bounds, token and credential redaction.
+- `src/server.test.ts` (20 tests): Express rate limiter, CORS policies, health check, and threat check route handling.
+- `src/utils/threatStates.test.ts` (5 tests): Exact messaging contracts for Clean, Threat, Unconfigured, and Unavailable states.
+- `src/server/dnsRecon.test.ts` (16 tests): Asynchronous DNS lookups, RDAP bootstrap queries, timeouts, and private IP isolation.
+- `src/server/redirectInspector.test.ts` (15 tests): Multi-hop redirect limits, protocol downgrade alerts, SSRF defenses, loopback blocks, and connection pinning.
+- `src/utils/clipboardUrl.test.ts` (12 tests): Safe user-triggered clipboard reading, permissions rejection handling, and embedded link extraction.
+- `src/utils/shareTarget.test.ts` (9 tests): Android Web Share Target parameter parsing, candidate extraction, and query string cleanup.
+- `src/server/screenshotService.test.ts` (11 tests): Remote visual preview, local pre-flight SSRF blocks, secondary URL validation, incremental streaming limits, and binary magic bytes validation.
+- `src/utils/warningEngine.test.ts` (20 tests): Scam Awareness Warning Engine categories, contextual path-keyword classification, port 8080 wording, and regression verification for IP hosts with path keywords.
+
+---
+
+## Application Limitations & Constraints
+
+To maintain realistic security expectations, the application enforces and discloses the following constraints:
+
+1. **Heuristics Are Indicators, Not Guarantees**: A risk score of 0 or Low risk does not prove that a destination is safe. Novel phishing campaigns and compromised legitimate domains frequently exhibit standard technical structures.
+2. **External Threat Checks Require Configuration**: Google Safe Browsing lookups require a valid server-side API key. In unconfigured environments, the app operates strictly in local structural heuristic mode.
+3. **Unavailable Checks Must Not Be Treated as Clean**: If an external database, threat feed, or RDAP registry is temporarily unreachable, the application surfaces an "Inconclusive / Unavailable External Checks" finding.
+4. **Headers-Only Redirect Analysis**: HTTP redirect inspection analyses server-side HTTP `Location` headers (max 5 hops). It does **not** download or execute client-side JavaScript, DOM redirections (`window.location`), or `<meta http-equiv="refresh">` tags.
+5. **Screenshot Preview Privacy**: Remote screenshots are triggered strictly on-demand. When requested, the target URL is transmitted to Microlink API, which may temporarily cache public captures on its CDN.
+6. **No Automatic Link Opening**: The application deliberately does not open or navigate to analyzed links in the user's browser, preventing accidental execution of drive-by exploits. Users must independently verify destinations.
+7. **PWA Web Share Target Constraints**: Web Share Target support requires compatible operating systems and browsers (e.g., Chrome on Android). On unsupported platforms, users can use the on-demand clipboard inspector or manual paste.
 
 ---
 
 ## Responsible Disclosure & Security Guarantees
 
 ### Disclaimer
-> **Important**: Fraud Link Detector is a heuristic analysis and investigative assistance tool. A clean scan or low risk score **does not guarantee that a URL is safe or free from malicious intent**. Phishing actors frequently employ zero-day landing pages, polymorphic redirect cloaking, and compromised infrastructure that have not yet been flagged by threat intelligence feeds. Always exercise sound judgment before entering credentials or executing downloads.
+> **Important**: Fraud Link Detector is a heuristic analysis and investigative assistance tool. A clean scan or low risk score **does not guarantee that a URL is safe or free from malicious intent**. Always exercise sound judgment before entering credentials or executing downloads. This project has not been independently audited or certified by a third-party security firm.
 
 ### Reporting Vulnerabilities
 If you identify a security flaw or vulnerability within this application (particularly regarding SSRF bypasses or parsing logic), please disclose it responsibly. Do not open public issues for zero-day vulnerabilities. Please submit a private security advisory through GitHub or contact the repository maintainers directly.

@@ -19,9 +19,9 @@ export function Header() {
             </div>
           </div>
           <div className="hidden sm:flex items-center text-xs text-slate-400 gap-2 border border-slate-800 bg-slate-950/60 px-3 py-1.5 rounded-lg">
-            <span className="text-blue-400">Client-Side Only</span>
+            <span className="text-blue-400">Local URL Analysis</span>
             <span aria-hidden="true" className="text-slate-600">·</span>
-            <span>Zero External Tracking</span>
+            <span>Privacy-Focused Processing</span>
           </div>
         </div>
       </div>

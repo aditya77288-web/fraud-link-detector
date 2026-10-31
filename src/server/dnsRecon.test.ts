@@ -201,6 +201,9 @@ test('SSRF Protection: Rejects localhost, 127.0.0.1, and RFC 1918 private ranges
 test('SSRF Protection: Identifies IPv4-mapped IPv6 loopback and private addresses', () => {
   assert.equal(isSpecialUseIpv6('::ffff:127.0.0.1'), true);
   assert.equal(isSpecialUseIpv6('::ffff:192.168.1.1'), true);
+  assert.equal(isSpecialUseIpv6('::ffff:7f00:1'), true); // Hex loopback
+  assert.equal(isSpecialUseIpv6('::ffff:8.8.8.8'), false); // Public IPv4 mapped
+  assert.equal(isSpecialUseIpv6('::ffff:0808:0808'), false); // Public hex IPv4 mapped
   assert.equal(isSpecialUseIpv6('::1'), true);
   assert.equal(isSpecialUseIpv6('fe80::1'), true);
   assert.equal(isSpecialUseIpv6('fc00::1'), true);
@@ -228,3 +231,37 @@ test('RDAP: Handles upstream 500 error without throwing', async () => {
   assert.equal(result.status, 'error');
   assert.ok(result.message?.includes('500'));
 });
+
+// 14. SSRF Protection: Carrier-Grade NAT (RFC 6598) and Benchmark (RFC 2544) Ranges
+test('SSRF Protection: Rejects Carrier-Grade NAT (100.64.0.0/10) and Benchmark (198.18.0.0/15) ranges', () => {
+  assert.equal(isSpecialUseIpv4('100.64.0.1'), true);
+  assert.equal(isSpecialUseIpv4('100.127.255.254'), true);
+  assert.equal(isSpecialUseIpv4('100.63.255.255'), false); // Just outside CGNAT
+  assert.equal(isSpecialUseIpv4('100.128.0.1'), false); // Just outside CGNAT
+  assert.equal(isSpecialUseIpv4('198.18.0.1'), true);
+  assert.equal(isSpecialUseIpv4('198.19.255.254'), true);
+});
+
+// 15. SSRF Protection: IPv4-compatible IPv6 notation
+test('SSRF Protection: Rejects IPv4-compatible IPv6 notation with private addresses', () => {
+  assert.equal(isSpecialUseIpv6('::127.0.0.1'), true);
+  assert.equal(isSpecialUseIpv6('::192.168.1.1'), true);
+  assert.equal(isSpecialUseIpv6('::10.0.0.1'), true);
+  assert.equal(isSpecialUseIpv6('::93.184.215.14'), false);
+});
+
+// 16. SSRF Protection: Mixed public and private IP resolution (DNS rebinding)
+test('SSRF Protection: Detects mixed public and private IP resolution (DNS rebinding)', async () => {
+  const mixedResolver: DnsResolverInterface = {
+    resolve4: async () => ['93.184.215.14', '127.0.0.1'],
+    resolve6: async () => [],
+    resolveMx: async () => [],
+  };
+
+  const result = await performFullRecon('rebind-test.com', mixedResolver);
+  assert.equal(result.isSpecialUse, true);
+  assert.equal(result.rdap.status, 'skipped');
+  assert.ok(result.findings.some((f) => f.id === 'recon-resolved-private'));
+  assert.ok(result.findings.some((f) => f.title.includes('DNS Rebinding Risk')));
+});
+

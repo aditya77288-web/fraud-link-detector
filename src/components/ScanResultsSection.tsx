@@ -21,6 +21,7 @@ import {
   GitCommit,
   ArrowRight,
   CornerDownRight,
+  ChevronDown,
 } from 'lucide-react';
 import { useState } from 'react';
 import { ParsedUrlDetails } from '../utils/urlParser';
@@ -28,6 +29,9 @@ import { assessUrlRisk, RiskAssessment } from '../utils/riskEngine';
 import { ThreatIntelligenceState } from '../types/threat';
 import { ReconClientState } from '../types/recon';
 import { RedirectClientState } from '../types/redirect';
+import { ScreenshotPreviewCard } from './ScreenshotPreviewCard';
+import { generateScamAwarenessReport } from '../utils/warningEngine';
+import { ScamAwarenessReport, WarningSeverity } from '../types/warning';
 
 interface ScanResultsSectionProps {
   scannedResult: ParsedUrlDetails | null;
@@ -44,6 +48,14 @@ export function ScanResultsSection({
 }: ScanResultsSectionProps) {
   const [copied, setCopied] = useState(false);
   const [copiedHopIndex, setCopiedHopIndex] = useState<number | null>(null);
+  const [expandedWarnings, setExpandedWarnings] = useState<Record<string, boolean>>({});
+
+  const toggleWarningExpanded = (warnId: string, defaultOpen: boolean) => {
+    setExpandedWarnings((prev) => ({
+      ...prev,
+      [warnId]: prev[warnId] !== undefined ? !prev[warnId] : !defaultOpen,
+    }));
+  };
 
   const handleCopyUrl = (text: string) => {
     navigator.clipboard.writeText(text);
@@ -59,6 +71,16 @@ export function ScanResultsSection({
 
   const assessment: RiskAssessment | null = scannedResult?.isValid
     ? assessUrlRisk(scannedResult)
+    : null;
+
+  const scamReport: ScamAwarenessReport | null = scannedResult?.isValid
+    ? generateScamAwarenessReport({
+        parsedUrl: scannedResult,
+        assessment,
+        threatState,
+        reconState,
+        redirectState,
+      })
     : null;
 
   const getRiskLevelStyles = (level: string) => {
@@ -87,6 +109,64 @@ export function ScanResultsSection({
           border: 'border-emerald-500/20',
           icon: ShieldCheck,
         };
+    }
+  };
+
+  const getWarningSeverityStyles = (severity: WarningSeverity) => {
+    switch (severity) {
+      case 'critical':
+        return {
+          badge: 'text-rose-400 bg-rose-500/10 border-rose-500/30',
+          card: 'bg-rose-950/20 border-rose-500/30',
+          text: 'text-rose-400',
+          label: 'CRITICAL THREAT',
+          icon: ShieldAlert,
+        };
+      case 'high':
+        return {
+          badge: 'text-rose-400 bg-rose-500/10 border-rose-500/30',
+          card: 'bg-rose-950/15 border-rose-500/25',
+          text: 'text-rose-400',
+          label: 'HIGH RISK',
+          icon: AlertTriangle,
+        };
+      case 'medium':
+        return {
+          badge: 'text-amber-400 bg-amber-500/10 border-amber-500/30',
+          card: 'bg-amber-950/15 border-amber-500/25',
+          text: 'text-amber-400',
+          label: 'MEDIUM RISK',
+          icon: AlertCircle,
+        };
+      case 'low':
+        return {
+          badge: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/30',
+          card: 'bg-emerald-950/15 border-emerald-500/25',
+          text: 'text-emerald-400',
+          label: 'LOW RISK',
+          icon: ShieldCheck,
+        };
+      default: // info
+        return {
+          badge: 'text-cyan-400 bg-cyan-500/10 border-cyan-500/30',
+          card: 'bg-slate-900/60 border-slate-800',
+          text: 'text-cyan-400',
+          label: 'INCONCLUSIVE / INFO',
+          icon: Info,
+        };
+    }
+  };
+
+  const getConfidenceBadge = (confidence: string) => {
+    switch (confidence) {
+      case 'confirmed':
+        return 'bg-rose-500/20 text-rose-300 border-rose-500/30';
+      case 'suspicious':
+        return 'bg-amber-500/20 text-amber-300 border-amber-500/30';
+      case 'inconclusive':
+        return 'bg-slate-800 text-slate-300 border-slate-700';
+      default:
+        return 'bg-blue-500/20 text-blue-300 border-blue-500/30';
     }
   };
 
@@ -253,6 +333,217 @@ export function ScanResultsSection({
                 </p>
               </div>
             </div>
+
+            {/* FEATURE: Evidence-Based Scam Awareness Warning Engine */}
+            {scamReport && (
+              <div
+                className="bg-slate-950/90 border border-slate-800 rounded-xl p-5 shadow-lg space-y-4 transition-all"
+                aria-labelledby="scam-warnings-heading"
+              >
+                {/* Section Header */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3.5 border-b border-slate-800/80">
+                  <div className="flex items-center gap-2.5">
+                    <div className="p-2 rounded-lg bg-blue-500/10 border border-blue-500/20 text-blue-400">
+                      <ShieldAlert className="w-5 h-5" aria-hidden="true" />
+                    </div>
+                    <div>
+                      <h3
+                        id="scam-warnings-heading"
+                        className="text-base font-bold text-white tracking-tight flex items-center gap-2"
+                      >
+                        Scam Awareness Warning Engine
+                        <span className="text-xs font-mono font-normal px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 border border-slate-700">
+                          {scamReport.warnings.length} finding(s)
+                        </span>
+                      </h3>
+                      <p className="text-xs text-slate-400 mt-0.5">
+                        Evidence-based safety guidance, scam scenarios, and practical next steps
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Summary Guidance Badge */}
+                  <div className="self-start sm:self-auto">
+                    {scamReport.hasConfirmedThreat ? (
+                      <span className="text-xs font-semibold px-3 py-1 rounded-full border text-rose-400 bg-rose-500/10 border-rose-500/30">
+                        Confirmed Threat Match
+                      </span>
+                    ) : scamReport.overallRiskLevel === 'High' ? (
+                      <span className="text-xs font-semibold px-3 py-1 rounded-full border text-rose-400 bg-rose-500/10 border-rose-500/30">
+                        High Concern Indicators
+                      </span>
+                    ) : scamReport.overallRiskLevel === 'Medium' ? (
+                      <span className="text-xs font-semibold px-3 py-1 rounded-full border text-amber-400 bg-amber-500/10 border-amber-500/30">
+                        Suspicious Indicators
+                      </span>
+                    ) : (
+                      <span className="text-xs font-semibold px-3 py-1 rounded-full border text-emerald-400 bg-emerald-500/10 border-emerald-500/30">
+                        Standard Web Structure
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                {/* Primary Guidance Banner */}
+                <div
+                  className={`p-3.5 rounded-xl border text-xs sm:text-sm font-medium flex items-start gap-3 ${
+                    scamReport.hasConfirmedThreat || scamReport.overallRiskLevel === 'High'
+                      ? 'bg-rose-950/25 border-rose-500/30 text-rose-200'
+                      : scamReport.overallRiskLevel === 'Medium'
+                      ? 'bg-amber-950/20 border-amber-500/30 text-amber-200'
+                      : 'bg-blue-950/20 border-blue-500/30 text-slate-200'
+                  }`}
+                >
+                  <AlertCircle className="w-5 h-5 shrink-0 mt-0.5 text-current" aria-hidden="true" />
+                  <div className="space-y-1">
+                    <p className="font-semibold">{scamReport.summaryGuidance}</p>
+                  </div>
+                </div>
+
+                {/* Warning Cards List */}
+                <div className="space-y-3 pt-1">
+                  {scamReport.warnings.map((warn) => {
+                    const styles = getWarningSeverityStyles(warn.severity);
+                    const WarnIcon = styles.icon;
+                    const confidenceBadgeClass = getConfidenceBadge(warn.confidence);
+                    const isDefaultOpen = warn.severity === 'critical';
+                    const isOpen =
+                      expandedWarnings[warn.id] !== undefined
+                        ? expandedWarnings[warn.id]
+                        : isDefaultOpen;
+
+                    return (
+                      <div
+                        key={warn.id}
+                        className={`p-4 rounded-xl border ${styles.card} transition-all space-y-3`}
+                      >
+                        {/* Warning Header */}
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="flex items-center gap-2">
+                            <WarnIcon className={`w-4 h-4 ${styles.text} shrink-0`} aria-hidden="true" />
+                            <span className="text-sm font-bold text-white">{warn.title}</span>
+                          </div>
+
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            {/* Accessible severity badge with explicit text */}
+                            <span
+                              className={`text-[11px] font-semibold px-2.5 py-0.5 rounded-full border ${styles.badge}`}
+                            >
+                              {styles.label}
+                            </span>
+                            {/* Confidence / Status label */}
+                            <span
+                              className={`text-[10px] uppercase font-mono px-2 py-0.5 rounded-full border ${confidenceBadgeClass}`}
+                            >
+                              {warn.confidence}
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* Observed Evidence Chips - Primary evidence immediately visible */}
+                        {warn.evidence && warn.evidence.length > 0 && (
+                          <div className="space-y-1.5 bg-slate-950/70 p-2.5 rounded-lg border border-slate-800/80">
+                            <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 block">
+                              Observed Evidence ({warn.evidence.length})
+                            </span>
+                            <div className="flex flex-wrap gap-1.5">
+                              {warn.evidence.map((ev, i) => (
+                                <span
+                                  key={i}
+                                  className="text-xs font-mono bg-slate-900 border border-slate-700/80 text-blue-300 px-2 py-1 rounded"
+                                >
+                                  {ev}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Practical Recommendation - Primary action immediately visible */}
+                        <div className="p-3 rounded-lg bg-slate-900/90 border border-slate-800 text-xs text-slate-200 flex items-start gap-2.5">
+                          <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" aria-hidden="true" />
+                          <div>
+                            <span className="font-semibold text-white block mb-0.5">
+                              Recommended Action:
+                            </span>
+                            <span className="text-slate-300 leading-relaxed">
+                              {warn.recommendedAction}
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* Secondary Technical Explanations & Scenario - Accessible Expandable Section */}
+                        {(warn.explanation || warn.potentialScamScenario) && (
+                          <div className="rounded-lg bg-slate-950/60 border border-slate-800/80 overflow-hidden">
+                            <button
+                              type="button"
+                              onClick={() => toggleWarningExpanded(warn.id, isDefaultOpen)}
+                              aria-expanded={isOpen}
+                              aria-controls={`warning-details-${warn.id}`}
+                              className="w-full flex items-center justify-between gap-2 px-3 py-2 text-xs text-slate-400 hover:text-slate-200 hover:bg-slate-900/60 transition-colors cursor-pointer select-none focus:outline-none focus:ring-1 focus:ring-blue-500/50"
+                            >
+                              <span className="font-semibold text-[11px] uppercase tracking-wider flex items-center gap-1.5 text-slate-400">
+                                <Info className="w-3.5 h-3.5 text-blue-400" aria-hidden="true" />
+                                Technical Breakdown & Threat Analysis
+                              </span>
+                              <span className="flex items-center gap-1 text-[11px] text-slate-400">
+                                <span>{isOpen ? 'Hide technical details' : 'Show technical details'}</span>
+                                <ChevronDown
+                                  className={`w-3.5 h-3.5 transition-transform duration-200 ${
+                                    isOpen ? 'rotate-180' : ''
+                                  }`}
+                                  aria-hidden="true"
+                                />
+                              </span>
+                            </button>
+
+                            {isOpen && (
+                              <div
+                                id={`warning-details-${warn.id}`}
+                                className="p-3 pt-2.5 space-y-2.5 border-t border-slate-800/60 bg-slate-950/80 text-xs"
+                              >
+                                {warn.explanation && (
+                                  <div>
+                                    <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 block mb-0.5">
+                                      Why this matters / Technical Context:
+                                    </span>
+                                    <p className="text-xs text-slate-300 leading-relaxed">
+                                      {warn.explanation}
+                                    </p>
+                                  </div>
+                                )}
+
+                                {warn.potentialScamScenario && (
+                                  <div className="p-2.5 rounded-lg bg-amber-500/10 border border-amber-500/20 text-xs text-amber-200 flex items-start gap-2.5">
+                                    <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" aria-hidden="true" />
+                                    <div>
+                                      <span className="font-semibold text-amber-300 block mb-0.5">
+                                        Possible Scam Scenario:
+                                      </span>
+                                      <span className="text-amber-200/90 leading-relaxed">
+                                        {warn.potentialScamScenario}
+                                      </span>
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Bottom Disclaimer */}
+                <div className="pt-2 border-t border-slate-800/80 flex items-start gap-2 text-[11px] text-slate-400">
+                  <Info className="w-3.5 h-3.5 text-blue-400 shrink-0 mt-0.5" />
+                  <p>
+                    <strong className="text-slate-300">Warning Engine Notice:</strong> {scamReport.disclaimer}
+                  </p>
+                </div>
+              </div>
+            )}
 
             {/* 2. Threat Intelligence Feed: Google Safe Browsing */}
             {threatState && threatState.status !== 'idle' && (
@@ -1025,7 +1316,7 @@ export function ScanResultsSection({
                 <li>
                   <span className="font-medium text-slate-200">Network Port:</span>{' '}
                   {scannedResult.isNonStandardPort
-                    ? `Non-standard port :${scannedResult.explicitPort} (differs from standard default).`
+                    ? `Non-standard port :${scannedResult.explicitPort} (${scannedResult.explicitPort === '8080' ? 'alternative/non-default HTTP port; ' : ''}standard defaults are 80 for HTTP and 443 for HTTPS; not proof of malicious activity).`
                     : `Standard default port (${scannedResult.port}).`}
                 </li>
                 <li>
@@ -1036,6 +1327,9 @@ export function ScanResultsSection({
                 </li>
               </ul>
             </div>
+
+            {/* 7. Website Visual Preview (Isolated Cloud Render) */}
+            <ScreenshotPreviewCard targetUrl={scannedResult.normalizedUrl} />
           </div>
         ) : null}
       </div>
