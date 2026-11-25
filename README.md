@@ -118,7 +118,7 @@ To ensure complete technical transparency, features are categorized into impleme
 - [x] **PWA Web Share Target (Android & Desktop)**: Receives shared suspicious links or message text from chat apps (WhatsApp, Telegram, SMS) with explicit candidate confirmation before analysis.
 - [x] **Isolated Cloud Website Screenshot**: Ephemeral cloud-rendered visual preview via external isolated sandbox (Microlink API) with local SSRF pre-flight blocking, 8-second global timeout, 2MB incremental stream ceiling, raster magic-bytes validation, and CDN privacy disclosure.
 - [x] **Privacy Labels & Layered Disclosures**: Header accurately presents `"Local URL Analysis"` and `"Privacy-Focused Processing"` badges, complemented by a dedicated Privacy Architecture card detailing all 5 processing layers.
-- [x] **Automated Test Suite**: 128 automated unit and integration tests covering parser logic, risk engine rules, warning engine classifications, SSRF bypasses, API contracts, clipboard parsing, share targets, and screenshot rendering.
+- [x] **Automated Test Suite**: 129 automated unit and integration tests covering parser logic, risk engine rules, warning engine classifications, SSRF bypasses, API contracts, clipboard parsing, share targets, and screenshot rendering.
 
 ### 2. Partially Implemented Features
 
@@ -396,7 +396,7 @@ Content-Type: application/json
   "imageDataUri": "data:image/jpeg;base64,...",
   "capturedAt": "2026-10-26T20:50:00.000Z",
   "viewport": {
-    "width": 1280,
+    "width": 1290,
     "height": 800
   }
 }
@@ -474,7 +474,7 @@ npm run start
 - `npm run build`: Compiles production frontend bundle to `dist/` (`vite build`).
 - `npm run start`: Runs production server with pre-built static assets (`NODE_ENV=production tsx server.ts`).
 - `npm run lint`: Performs TypeScript type checking (`tsc --noEmit`).
-- `npm test`: Runs the 128 currently defined automated unit and integration test cases (`tsx --test ...`).
+- `npm test`: Runs the 129 currently defined automated unit and integration test cases (`tsx --test ...`).
 - `npm run clean`: Cleans build output directories (`rm -rf dist server.js`).
 
 ---
@@ -511,7 +511,7 @@ npm run build
 ```
 
 ### Verified Test Suite Summary
-The repository currently defines **128 test cases** across **11 dedicated test specifications**. The CI workflow runs the complete suite on each push and pull request; use the CI status badge above as the current pass/fail source:
+The repository currently defines **129 test cases** across **11 dedicated test specifications**. The CI workflow runs the complete suite on each push and pull request; use the CI status badge above as the current pass/fail source:
 - `src/utils/urlParser.test.ts` (6 tests): RFC 3986 normalization, default ports, authority credential handling, Punycode parsing.
 - `src/utils/riskEngine.test.ts` (8 tests): Deterministic scoring rules, threshold clamping, edge-case heuristic triggers.
 - `src/utils/historyStorage.test.ts` (4 tests): Local storage persistence, LRU bounds, token and credential redaction.
