@@ -151,7 +151,8 @@ export function stripCredentials(rawUrl: string): string {
  */
 export async function resolveAndValidateHost(
   hostname: string,
-  dnsResolver: DnsResolverInterface = defaultDnsResolver
+  dnsResolver: DnsResolverInterface = defaultDnsResolver,
+  timeoutMs = 3000
 ): Promise<{ safe: boolean; pinnedIp: string | null; errorReason?: string }> {
   const normalizedHost = hostname.toLowerCase().trim();
   const unbracketedHost = normalizedHost.replace(/^\[|\]$/g, '');
@@ -191,10 +192,21 @@ export async function resolveAndValidateHost(
 
   // 4. Domain name DNS resolution
   let resolvedAddresses: string[] = [];
+  let dnsTimedOut = false;
+  let dnsTimer: NodeJS.Timeout | undefined;
   try {
-    const [v4Results, v6Results] = await Promise.allSettled([
+    const dnsResults = Promise.allSettled([
       dnsResolver.resolve4(normalizedHost),
       dnsResolver.resolve6(normalizedHost),
+    ]);
+    const [v4Results, v6Results] = await Promise.race([
+      dnsResults,
+      new Promise<never>((_, reject) => {
+        dnsTimer = setTimeout(() => {
+          const error = new Error('DNS_LOOKUP_TIMEOUT');
+          reject(error);
+        }, Math.max(1, timeoutMs));
+      }),
     ]);
 
     if (v4Results.status === 'fulfilled' && Array.isArray(v4Results.value)) {
@@ -203,8 +215,18 @@ export async function resolveAndValidateHost(
     if (v6Results.status === 'fulfilled' && Array.isArray(v6Results.value)) {
       resolvedAddresses.push(...v6Results.value);
     }
-  } catch {
-    // Handled below if empty
+  } catch (error) {
+    dnsTimedOut = error instanceof Error && error.message === 'DNS_LOOKUP_TIMEOUT';
+  } finally {
+    if (dnsTimer) clearTimeout(dnsTimer);
+  }
+
+  if (dnsTimedOut) {
+    return {
+      safe: false,
+      pinnedIp: null,
+      errorReason: `DNS lookup timed out for host "${normalizedHost}".`,
+    };
   }
 
   if (resolvedAddresses.length === 0) {
@@ -324,17 +346,28 @@ export async function inspectRedirectChain(
     visitedUrls.add(currentRawUrl);
 
     // Validate and resolve host to a pinned public IP
-    const hostValidation = await resolveAndValidateHost(currentUrlObj.hostname, dnsResolver);
+    const remainingBeforeDns = overallTimeout - (Date.now() - startTime);
+    if (remainingBeforeDns <= 0) {
+      status = 'TIMEOUT';
+      statusMessage = `Inspection timed out after exceeding ${overallTimeout / 1000} seconds overall.`;
+      break;
+    }
+    const hostValidation = await resolveAndValidateHost(
+      currentUrlObj.hostname,
+      dnsResolver,
+      Math.min(3000, remainingBeforeDns)
+    );
 
     if (!hostValidation.safe || !hostValidation.pinnedIp) {
-      status = 'BLOCKED_SPECIAL_USE_IP';
+      const dnsTimedOut = hostValidation.errorReason?.includes('DNS lookup timed out') ?? false;
+      status = dnsTimedOut ? 'TIMEOUT' : 'BLOCKED_SPECIAL_USE_IP';
       statusMessage = hostValidation.errorReason || 'Destination host points to a restricted IP address.';
       
       hops.push({
         hopIndex: hopIndex + 1,
         url: currentSanitizedUrl,
         statusCode: 0,
-        statusText: 'Blocked (Restricted Destination)',
+        statusText: dnsTimedOut ? 'DNS Timeout' : 'Blocked (Restricted Destination)',
         locationHeader: null,
         resolvedIp: null,
         isHttps: currentUrlObj.protocol === 'https:',
@@ -356,10 +389,27 @@ export async function inspectRedirectChain(
     // Issue request to pinned IP (HEAD first, fallback to GET if 405)
     let hopRes: HopResponse;
     try {
+      const requestWithDeadline = async (method: 'HEAD' | 'GET'): Promise<HopResponse> => {
+        const remaining = overallTimeout - (Date.now() - startTime);
+        if (remaining <= 0) throw new Error('HOP_TIMEOUT');
+        const effectiveTimeout = Math.max(1, Math.min(hopTimeout, remaining));
+        let requestTimer: NodeJS.Timeout | undefined;
+        try {
+          return await Promise.race([
+            httpRequester(currentUrlObj, pinnedIp, method, effectiveTimeout),
+            new Promise<never>((_, reject) => {
+              requestTimer = setTimeout(() => reject(new Error('HOP_TIMEOUT')), effectiveTimeout);
+            }),
+          ]);
+        } finally {
+          if (requestTimer) clearTimeout(requestTimer);
+        }
+      };
+
       try {
-        hopRes = await httpRequester(currentUrlObj, pinnedIp, 'HEAD', hopTimeout);
+        hopRes = await requestWithDeadline('HEAD');
         if (hopRes.statusCode === 405) {
-          hopRes = await httpRequester(currentUrlObj, pinnedIp, 'GET', hopTimeout);
+          hopRes = await requestWithDeadline('GET');
         }
       } catch (err: unknown) {
         const errorMsg = err instanceof Error ? err.message : String(err);

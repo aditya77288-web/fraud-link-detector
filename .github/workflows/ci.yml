@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Test, type-check, and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Start API for integration tests
+        run: |
+          npm run dev > /tmp/fraud-link-detector-api.log 2>&1 &
+          echo $! > /tmp/fraud-link-detector-api.pid
+          for attempt in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:3000/api/health; then
+              exit 0
+            fi
+            sleep 1
+          done
+          cat /tmp/fraud-link-detector-api.log
+          exit 1
+
+      - name: Run automated tests
+        run: npm test
+
+      - name: Stop API
+        if: always()
+        run: |
+          if [ -f /tmp/fraud-link-detector-api.pid ]; then
+            kill "$(cat /tmp/fraud-link-detector-api.pid)" || true
+          fi
+
+      - name: Type-check TypeScript
+        run: npm run lint
+
+      - name: Build production frontend
+        run: npm run build

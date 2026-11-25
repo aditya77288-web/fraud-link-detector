@@ -1,7 +1,7 @@
 # Fraud Link Detector
 
-[![Tests](https://img.shields.io/badge/tests-126%20passing-brightgreen.svg)](#testing--verification)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5.x-blue.svg)](https://www.typescriptlang.org/)
+[![CI](https://github.com/aditya77288-web/fraud-link-detector/actions/workflows/ci.yml/badge.svg)](https://github.com/aditya77288-web/fraud-link-detector/actions/workflows/ci.yml)
+[![TypeScript](https://img.shields.io/badge/TypeScript-7.x-blue.svg)](https://www.typescriptlang.org/)
 [![React](https://img.shields.io/badge/React-19.0-61dafb.svg)](https://react.dev/)
 [![Express](https://img.shields.io/badge/Express-4.21-lightgrey.svg)](https://expressjs.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -118,7 +118,7 @@ To ensure complete technical transparency, features are categorized into impleme
 - [x] **PWA Web Share Target (Android & Desktop)**: Receives shared suspicious links or message text from chat apps (WhatsApp, Telegram, SMS) with explicit candidate confirmation before analysis.
 - [x] **Isolated Cloud Website Screenshot**: Ephemeral cloud-rendered visual preview via external isolated sandbox (Microlink API) with local SSRF pre-flight blocking, 8-second global timeout, 2MB incremental stream ceiling, raster magic-bytes validation, and CDN privacy disclosure.
 - [x] **Privacy Labels & Layered Disclosures**: Header accurately presents `"Local URL Analysis"` and `"Privacy-Focused Processing"` badges, complemented by a dedicated Privacy Architecture card detailing all 5 processing layers.
-- [x] **Automated Test Suite**: 126 automated unit and integration tests covering parser logic, risk engine rules, warning engine classifications, SSRF bypasses, API contracts, clipboard parsing, share targets, and screenshot rendering.
+- [x] **Automated Test Suite**: 129 automated unit and integration tests covering parser logic, risk engine rules, warning engine classifications, SSRF bypasses, API contracts, clipboard parsing, share targets, and screenshot rendering.
 
 ### 2. Partially Implemented Features
 
@@ -396,7 +396,7 @@ Content-Type: application/json
   "imageDataUri": "data:image/jpeg;base64,...",
   "capturedAt": "2026-10-26T20:50:00.000Z",
   "viewport": {
-    "width": 1280,
+    "width": 1290,
     "height": 800
   }
 }
@@ -436,9 +436,11 @@ Real-time infrastructure reconnaissance displaying domain registration age from 
 
 ### 1. Clone the Repository
 ```bash
-git clone https://github.com/your-username/fraud-link-detector.git
+git clone https://github.com/aditya77288-web/fraud-link-detector.git
 cd fraud-link-detector
 ```
+
+This repository currently has no committed npm lockfile. Dependency versions can therefore resolve to newer compatible releases; add and validate a lockfile before relying on fully reproducible installs.
 
 ### 2. Install Dependencies
 ```bash
@@ -472,7 +474,7 @@ npm run start
 - `npm run build`: Compiles production frontend bundle to `dist/` (`vite build`).
 - `npm run start`: Runs production server with pre-built static assets (`NODE_ENV=production tsx server.ts`).
 - `npm run lint`: Performs TypeScript type checking (`tsc --noEmit`).
-- `npm test`: Runs all 126 automated unit and integration tests (`tsx --test ...`).
+- `npm test`: Runs the 129 currently defined automated unit and integration test cases (`tsx --test ...`).
 - `npm run clean`: Cleans build output directories (`rm -rf dist server.js`).
 
 ---
@@ -485,7 +487,7 @@ Configuration variables defined in `.env.example`:
 |:---|:---:|:---:|:---|
 | `PORT` | Optional | `3000` | HTTP port on which the Express server listens. |
 | `NODE_ENV` | Optional | `development` | Set to `production` when running the pre-compiled bundle from `dist/`. |
-| `TRUST_PROXY` | Optional | `1` | Controls Express reverse-proxy trust (`app.set('trust proxy', ...)`). Essential for accurate client IP identification under Cloud Run, Nginx, or load balancers to enforce per-IP rate limits. |
+| `TRUST_PROXY` | Optional | `1` | Controls Express reverse-proxy trust (`app.set('trust proxy', ...)`). Keep `1` only when exactly one trusted proxy hop is present. Set to `false` when directly exposed. Incorrect settings can undermine IP-based rate limiting. |
 | `GOOGLE_SAFE_BROWSING_API_KEY` | Optional | None | API key for Google Safe Browsing Lookup API v4 (`threatMatches:find`). If omitted, `/api/threat-check` returns `configured: false`, and the application runs in offline structural heuristic mode. |
 | `SCREENSHOT_API_KEY` | Optional | None | API key for external screenshot rendering via Microlink API. If omitted, the server uses Microlink's public free-tier. |
 
@@ -509,7 +511,7 @@ npm run build
 ```
 
 ### Verified Test Suite Summary
-All **126 automated tests pass** across **11 dedicated test specifications**:
+The repository currently defines **129 test cases** across **11 dedicated test specifications**. The CI workflow runs the complete suite on each push and pull request; use the CI status badge above as the current pass/fail source:
 - `src/utils/urlParser.test.ts` (6 tests): RFC 3986 normalization, default ports, authority credential handling, Punycode parsing.
 - `src/utils/riskEngine.test.ts` (8 tests): Deterministic scoring rules, threshold clamping, edge-case heuristic triggers.
 - `src/utils/historyStorage.test.ts` (4 tests): Local storage persistence, LRU bounds, token and credential redaction.

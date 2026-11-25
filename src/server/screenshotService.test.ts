@@ -1,13 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { captureWebsiteScreenshot } from './screenshotService.js';
+import { captureWebsiteScreenshot, ScreenshotHostResolver } from './screenshotService.js';
+
+const publicTestResolver: ScreenshotHostResolver = async () => ['93.184.216.34'];
 
 // 1. SSRF Guard: Localhost & 127.0.0.1
 test('captureWebsiteScreenshot SSRF: Blocks localhost and loopback destination (127.0.0.1)', async () => {
   const result = await captureWebsiteScreenshot('http://127.0.0.1:8080/admin');
   assert.equal(result.status, 400);
   assert.equal(result.body.status, 'blocked_special_use');
-  assert.ok(result.body.error?.includes('special-use'));
+  assert.ok(result.body.error?.includes('public IP addresses'));
 
   const hostResult = await captureWebsiteScreenshot('http://localhost:3000/api');
   assert.equal(hostResult.status, 400);
@@ -78,7 +80,8 @@ test('captureWebsiteScreenshot: Returns base64 data URI and metadata on successf
   const result = await captureWebsiteScreenshot(
     'https://www.example.com/login',
     undefined,
-    mockFetch
+    mockFetch,
+    publicTestResolver
   );
 
   assert.equal(result.status, 200);
@@ -100,7 +103,8 @@ test('captureWebsiteScreenshot: Gracefully handles upstream provider timeout (50
   const result = await captureWebsiteScreenshot(
     'https://very-slow-site.com',
     undefined,
-    timeoutFetch
+    timeoutFetch,
+    publicTestResolver
   );
 
   assert.equal(result.status, 504);
@@ -117,7 +121,8 @@ test('captureWebsiteScreenshot: Handles upstream 429 provider quota saturation',
   const result = await captureWebsiteScreenshot(
     'https://example.com/site',
     undefined,
-    rateLimitFetch
+    rateLimitFetch,
+    publicTestResolver
   );
 
   assert.equal(result.status, 429);
@@ -134,7 +139,8 @@ test('captureWebsiteScreenshot: Handles upstream 502 failure without throwing un
   const result = await captureWebsiteScreenshot(
     'https://crash-test.org',
     undefined,
-    failFetch
+    failFetch,
+    publicTestResolver
   );
 
   assert.equal(result.status, 502);
@@ -162,7 +168,8 @@ test('captureWebsiteScreenshot SSRF: Blocks provider returning non-HTTPS or inte
   const result = await captureWebsiteScreenshot(
     'https://normal-site.org',
     undefined,
-    internalCdnFetch
+    internalCdnFetch,
+    publicTestResolver
   );
 
   assert.equal(result.status, 502);
@@ -183,7 +190,8 @@ test('captureWebsiteScreenshot: Rejects SVG or text payloads pretending to be im
   const result = await captureWebsiteScreenshot(
     'https://test-svg.org',
     undefined,
-    fakeFetch
+    fakeFetch,
+    publicTestResolver
   );
 
   assert.equal(result.status, 502);
@@ -206,7 +214,8 @@ test('captureWebsiteScreenshot: Aborts responses exceeding maximum allowed size 
   const result = await captureWebsiteScreenshot(
     'https://giant-image.org',
     undefined,
-    oversizedFetch
+    oversizedFetch,
+    publicTestResolver
   );
 
   assert.equal(result.status, 502);
@@ -214,3 +223,49 @@ test('captureWebsiteScreenshot: Aborts responses exceeding maximum allowed size 
   assert.ok(result.body.error?.includes('maximum size limit'));
 });
 
+
+
+// DNS-based SSRF guard: reject hostnames resolving to private or mixed addresses.
+test('captureWebsiteScreenshot SSRF: Blocks hostnames resolving to private or mixed IP addresses', async () => {
+  const mixedResolver: ScreenshotHostResolver = async () => ['93.184.216.34', '10.0.0.8'];
+  let providerCalled = false;
+  const mockFetch: typeof fetch = async () => {
+    providerCalled = true;
+    return new Response('unexpected', { status: 500 });
+  };
+
+  const result = await captureWebsiteScreenshot(
+    'https://attacker-controlled.example.org/',
+    undefined,
+    mockFetch,
+    mixedResolver
+  );
+
+  assert.equal(result.status, 400);
+  assert.equal(result.body.status, 'blocked_special_use');
+  assert.equal(providerCalled, false);
+});
+
+test('captureWebsiteScreenshot SSRF: Rejects provider image redirects instead of following them', async () => {
+  const dummyPixel = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46]);
+  let imageFetchOptions: RequestInit | undefined;
+  const mockFetch: typeof fetch = async (url, options) => {
+    if (String(url).includes('api.microlink.io')) {
+      return new Response(JSON.stringify({
+        data: { screenshot: { url: 'https://cdn.microlink.io/mock.jpg' } },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }
+    imageFetchOptions = options;
+    return new Response(dummyPixel, { status: 302, headers: { Location: 'http://127.0.0.1/admin' } });
+  };
+
+  const result = await captureWebsiteScreenshot(
+    'https://www.example.com/login',
+    undefined,
+    mockFetch,
+    publicTestResolver
+  );
+
+  assert.equal(result.status, 502);
+  assert.equal(imageFetchOptions?.redirect, 'error');
+});

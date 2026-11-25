@@ -392,3 +392,27 @@ test('stripCredentials removes embedded username and password from authority', (
   assert.equal(cleaned, 'https://example.com/portal');
   assert.doesNotMatch(cleaned, /secret123/);
 });
+
+
+test('Redirect Inspector: DNS resolution is bounded by the overall timeout', async () => {
+  const hangingDns: DnsResolverInterface = {
+    resolve4: async () => new Promise<string[]>(() => {}),
+    resolve6: async () => new Promise<string[]>(() => {}),
+    resolveMx: async () => [],
+  };
+  let requestCalled = false;
+  const mockHttp: HttpRequester = async () => {
+    requestCalled = true;
+    return { statusCode: 200, statusText: 'OK', headers: {}, durationMs: 1 };
+  };
+
+  const result = await inspectRedirectChain('https://slow-dns.example.net/', {
+    dnsResolver: hangingDns,
+    httpRequester: mockHttp,
+    overallTimeoutMs: 40,
+  });
+
+  assert.equal(result.status, 'TIMEOUT');
+  assert.match(result.statusMessage, /DNS lookup timed out|overall/i);
+  assert.equal(requestCalled, false);
+});
