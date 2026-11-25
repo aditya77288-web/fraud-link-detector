@@ -31,8 +31,28 @@ jobs:
       - name: Install dependencies
         run: npm install --no-audit --no-fund
 
+      - name: Start API for integration tests
+        run: |
+          npm run dev > /tmp/fraud-link-detector-api.log 2>&1 &
+          echo $! > /tmp/fraud-link-detector-api.pid
+          for attempt in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:3000/api/health; then
+              exit 0
+            fi
+            sleep 1
+          done
+          cat /tmp/fraud-link-detector-api.log
+          exit 1
+
       - name: Run automated tests
         run: npm test
+
+      - name: Stop API
+        if: always()
+        run: |
+          if [ -f /tmp/fraud-link-detector-api.pid ]; then
+            kill "$(cat /tmp/fraud-link-detector-api.pid)" || true
+          fi
 
       - name: Type-check TypeScript
         run: npm run lint
