@@ -9,7 +9,7 @@ test('captureWebsiteScreenshot SSRF: Blocks localhost and loopback destination (
   const result = await captureWebsiteScreenshot('http://127.0.0.1:8080/admin');
   assert.equal(result.status, 400);
   assert.equal(result.body.status, 'blocked_special_use');
-  assert.ok(result.body.error?.includes('special-use'));
+  assert.ok(result.body.error?.includes('public IP addresses'));
 
   const hostResult = await captureWebsiteScreenshot('http://localhost:3000/api');
   assert.equal(hostResult.status, 400);
@@ -168,7 +168,8 @@ test('captureWebsiteScreenshot SSRF: Blocks provider returning non-HTTPS or inte
   const result = await captureWebsiteScreenshot(
     'https://normal-site.org',
     undefined,
-    internalCdnFetch
+    internalCdnFetch,
+    publicTestResolver
   );
 
   assert.equal(result.status, 502);
