@@ -1,7 +1,7 @@
 # Fraud Link Detector
 
 [![CI](https://github.com/aditya77288-web/fraud-link-detector/actions/workflows/ci.yml/badge.svg)](https://github.com/aditya77288-web/fraud-link-detector/actions/workflows/ci.yml)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5.x-blue.svg)](https://www.typescriptlang.org/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-7.x-blue.svg)](https://www.typescriptlang.org/)
 [![React](https://img.shields.io/badge/React-19.0-61dafb.svg)](https://react.dev/)
 [![Express](https://img.shields.io/badge/Express-4.21-lightgrey.svg)](https://expressjs.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -474,7 +474,7 @@ npm run start
 - `npm run build`: Compiles production frontend bundle to `dist/` (`vite build`).
 - `npm run start`: Runs production server with pre-built static assets (`NODE_ENV=production tsx server.ts`).
 - `npm run lint`: Performs TypeScript type checking (`tsc --noEmit`).
-- `npm test`: Runs all 126 automated unit and integration tests (`tsx --test ...`).
+- `npm test`: Runs the 126 currently defined automated unit and integration test cases (`tsx --test ...`).
 - `npm run clean`: Cleans build output directories (`rm -rf dist server.js`).
 
 ---
