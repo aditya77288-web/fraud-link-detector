@@ -1,6 +1,6 @@
 # Fraud Link Detector
 
-[![Tests](https://img.shields.io/badge/tests-126%20passing-brightgreen.svg)](#testing--verification)
+[![CI](https://github.com/aditya77288-web/fraud-link-detector/actions/workflows/ci.yml/badge.svg)](https://github.com/aditya77288-web/fraud-link-detector/actions/workflows/ci.yml)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-blue.svg)](https://www.typescriptlang.org/)
 [![React](https://img.shields.io/badge/React-19.0-61dafb.svg)](https://react.dev/)
 [![Express](https://img.shields.io/badge/Express-4.21-lightgrey.svg)](https://expressjs.com/)
@@ -436,9 +436,11 @@ Real-time infrastructure reconnaissance displaying domain registration age from 
 
 ### 1. Clone the Repository
 ```bash
-git clone https://github.com/your-username/fraud-link-detector.git
+git clone https://github.com/aditya77288-web/fraud-link-detector.git
 cd fraud-link-detector
 ```
+
+This repository currently has no committed npm lockfile. Dependency versions can therefore resolve to newer compatible releases; add and validate a lockfile before relying on fully reproducible installs.
 
 ### 2. Install Dependencies
 ```bash
@@ -485,7 +487,7 @@ Configuration variables defined in `.env.example`:
 |:---|:---:|:---:|:---|
 | `PORT` | Optional | `3000` | HTTP port on which the Express server listens. |
 | `NODE_ENV` | Optional | `development` | Set to `production` when running the pre-compiled bundle from `dist/`. |
-| `TRUST_PROXY` | Optional | `1` | Controls Express reverse-proxy trust (`app.set('trust proxy', ...)`). Essential for accurate client IP identification under Cloud Run, Nginx, or load balancers to enforce per-IP rate limits. |
+| `TRUST_PROXY` | Optional | `1` | Controls Express reverse-proxy trust (`app.set('trust proxy', ...)`). Keep `1` only when exactly one trusted proxy hop is present. Set to `false` when directly exposed. Incorrect settings can undermine IP-based rate limiting. |
 | `GOOGLE_SAFE_BROWSING_API_KEY` | Optional | None | API key for Google Safe Browsing Lookup API v4 (`threatMatches:find`). If omitted, `/api/threat-check` returns `configured: false`, and the application runs in offline structural heuristic mode. |
 | `SCREENSHOT_API_KEY` | Optional | None | API key for external screenshot rendering via Microlink API. If omitted, the server uses Microlink's public free-tier. |
 
@@ -509,7 +511,7 @@ npm run build
 ```
 
 ### Verified Test Suite Summary
-All **126 automated tests pass** across **11 dedicated test specifications**:
+The repository currently defines **126 test cases** across **11 dedicated test specifications**. The CI workflow runs the complete suite on each push and pull request; use the CI status badge above as the current pass/fail source:
 - `src/utils/urlParser.test.ts` (6 tests): RFC 3986 normalization, default ports, authority credential handling, Punycode parsing.
 - `src/utils/riskEngine.test.ts` (8 tests): Deterministic scoring rules, threshold clamping, edge-case heuristic triggers.
 - `src/utils/historyStorage.test.ts` (4 tests): Local storage persistence, LRU bounds, token and credential redaction.
