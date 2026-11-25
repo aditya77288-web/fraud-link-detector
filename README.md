@@ -29,6 +29,7 @@ A full-stack cybersecurity portfolio project for investigating suspicious links,
 - [Scam Awareness Warning Engine](#scam-awareness-warning-engine)
 - [API Reference](#api-reference)
 - [Visual Walkthrough](#visual-walkthrough)
+- [Quick Demo Guide](#quick-demo-guide)
 - [Installation & Getting Started](#installation--getting-started)
 - [Environment Configuration](#environment-configuration)
 - [Testing & Verification](#testing--verification)
@@ -473,6 +474,12 @@ Real-time infrastructure reconnaissance displaying domain registration age from 
 
 ---
 
+## Quick Demo Guide
+
+For a safe end-to-end walkthrough—from local setup and a first scan to API health checks and verification—see [docs/DEMO.md](docs/DEMO.md).
+
+---
+
 ## Installation & Getting Started
 
 ### Prerequisites
@@ -493,9 +500,16 @@ npm install
 ```
 
 ### 3. Configure Environment Variables (Optional)
-Copy the example environment configuration:
+Copy the example environment configuration.
+
+**macOS / Linux:**
 ```bash
 cp .env.example .env
+```
+
+**Windows PowerShell:**
+```powershell
+Copy-Item .env.example .env
 ```
 Local heuristic analysis works without external API keys. Safe Browsing and screenshot previews require their respective optional server-side keys for configured provider access. The server loads `.env` at startup.
 
@@ -517,10 +531,10 @@ npm run start
 ### Available NPM Scripts
 - `npm run dev`: Starts the local development server with Vite middleware (`tsx server.ts`).
 - `npm run build`: Compiles production frontend bundle to `dist/` (`vite build`).
-- `npm run start`: Runs production server with pre-built static assets (`NODE_ENV=production tsx server.ts`). On Windows PowerShell, if the script's Unix-style environment assignment is not supported by your shell, use `$env:NODE_ENV = 'production'` followed by `npx tsx server.ts`.
+- `npm run start`: Runs the production server with pre-built static assets. `cross-env` makes the `NODE_ENV=production` setting work consistently on Windows, macOS, and Linux.
 - `npm run lint`: Performs TypeScript type checking (`tsc --noEmit`).
 - `npm test`: Runs the 129 currently defined automated unit and integration test cases (`tsx --test ...`).
-- `npm run clean`: Cleans build output directories (`rm -rf dist server.js`).
+- `npm run clean`: Removes generated `dist/` and `server.js` outputs using a cross-platform Node.js script.
 
 ---
 
