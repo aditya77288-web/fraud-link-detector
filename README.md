@@ -6,14 +6,16 @@
 [![Express](https://img.shields.io/badge/Express-4.21-lightgrey.svg)](https://expressjs.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-An open-source, full-stack cybersecurity investigation workbench for analyzing suspicious links, deceptive URLs, and phishing lures. **Fraud Link Detector** combines client-side deterministic URL heuristics with hardened server-side reconnaissance—including Google Safe Browsing intelligence, asynchronous DNS and RDAP registry telemetry, an SSRF-hardened HTTP redirect chain inspector, an evidence-based Scam Awareness Warning Engine, and an on-demand cloud website screenshot preview.
+A full-stack cybersecurity portfolio project for investigating suspicious links, deceptive URLs, and potential phishing lures. **Fraud Link Detector** combines client-side deterministic URL heuristics with server-side reconnaissance—including optional Google Safe Browsing intelligence, DNS and RDAP telemetry, an SSRF-conscious HTTP redirect inspector, an evidence-based Scam Awareness Warning Engine, and an on-demand cloud screenshot preview. The project emphasizes transparent findings, privacy disclosures, defensive network controls, and testable security behavior.
 
 ---
 
 ## Table of Contents
 
+- [Project at a Glance](#project-at-a-glance)
 - [Problem Statement](#problem-statement)
 - [Architecture Overview](#architecture-overview)
+- [Data Flow & Privacy](#data-flow--privacy)
 - [Feature Breakdown & Implementation Status](#feature-breakdown--implementation-status)
   - [1. Implemented Features](#1-implemented-features)
   - [2. Partially Implemented Features](#2-partially-implemented-features)
@@ -31,8 +33,25 @@ An open-source, full-stack cybersecurity investigation workbench for analyzing s
 - [Environment Configuration](#environment-configuration)
 - [Testing & Verification](#testing--verification)
 - [Application Limitations & Constraints](#application-limitations--constraints)
-- [Responsible Disclosure & Security Guarantees](#responsible-disclosure--security-guarantees)
+- [Contributing](#contributing)
+- [Security Reporting](#security-reporting)
 - [License](#license)
+
+## Project at a Glance
+
+| Area | Details |
+|:---|:---|
+| Application type | React + TypeScript frontend with an Express API |
+| Primary purpose | Investigate suspicious URLs without opening them in the user's browser |
+| Local analysis | Deterministic URL parsing, heuristic scoring, and plain-English warnings |
+| Server-side analysis | Optional Safe Browsing lookup, DNS/RDAP reconnaissance, redirect inspection, and screenshot preview |
+| Defensive focus | URL validation, SSRF controls, DNS pinning for redirect requests, timeouts, rate limits, and sensitive-value redaction |
+| Verification | Automated Node.js tests, TypeScript type-checking, and production build in GitHub Actions |
+| License | MIT |
+
+**Project status:** Active development. This is an investigative aid, not a replacement for endpoint protection, a browser security product, or a professional security assessment. The project has not received an independent third-party security audit.
+
+**Documentation:** [Architecture](docs/ARCHITECTURE.md) · [Contributing](CONTRIBUTING.md) · [Security policy](SECURITY.md)
 
 ---
 
@@ -70,7 +89,7 @@ Fraud Link Detector is designed as a hybrid client-server application:
                  │                   │                   │
 ┌────────────────▼───────────────────▼───────────────────▼───────────────┐
 │                    BACKEND LAYER (Express 4 on Node.js)                │
-│  - In-memory rate limiting (60 req/min for recon/threat, 15 for photo) │
+│  - In-memory rate limiting (60 req/min for API checks, 15 for photo) │
 │  - Strict input validation & URL normalization                         │
 │  - Strips credentials from target authority prior to upstream dispatch │
 ├─────────────────────┬─────────────────────┬────────────────────────────┤
@@ -87,6 +106,8 @@ Fraud Link Detector is designed as a hybrid client-server application:
 │ - Pre-flight SSRF IP/host filtering, 8s timeout, 2MB buffer limit      │
 └────────────────────────────────────────────────────────────────────────┘
 ```
+
+For a maintained data-flow diagram and component boundaries, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). The screenshot feature uses an external rendering provider; local pre-flight checks reduce risk but cannot pin the provider's eventual connection to the submitted destination.
 
 ### Technology Stack
 - **Frontend**: React 19, TypeScript, Vite 8, Tailwind CSS, Lucide React icons, Motion
@@ -221,6 +242,30 @@ Fraud Link Detector includes an evidence-based **Scam Awareness Warning Engine**
 5. **Suspicious URL Structure (`suspicious_url_structure`)**: Flags direct numeric IPs, Punycode hostnames, and non-standard web ports.
 6. **Inconclusive / Unavailable External Checks (`inconclusive_check`)**: Surfaces when threat feeds or RDAP registries are offline or unconfigured, explicitly noting that unavailable checks must never be interpreted as clean results.
 7. **No Obvious Threats Detected (`no_obvious_threat`)**: Rendered when no heuristic rules are triggered, accompanied by a prominent non-guarantee disclaimer.
+
+---
+
+## Data Flow & Privacy
+
+The application uses different processing paths depending on which analysis features are requested:
+
+| Feature | Where processing occurs | External data flow |
+|:---|:---|:---|
+| URL parsing and heuristic score | User's browser | No reputation request is required for this local step |
+| Scan history | User's browser storage | Sensitive URL values are redacted before persistence |
+| Google Safe Browsing | Express server | When configured, the submitted URL is sent to Google Safe Browsing |
+| DNS and RDAP reconnaissance | Express server | DNS queries and RDAP requests are made to resolve domain infrastructure and registration data |
+| Redirect inspection | Express server | The server makes bounded HTTP requests to the submitted host and redirect destinations |
+| Screenshot preview | External rendering provider | Only on explicit request; the target URL is sent to Microlink for rendering |
+
+Important privacy and safety details:
+
+- Clipboard access is user-triggered; the application does not continuously monitor the clipboard.
+- Shared links and clipboard candidates require user confirmation before scanning.
+- The application does not automatically open the submitted URL in the user's browser.
+- API responses use `Cache-Control: no-store`.
+- Optional API keys must remain server-side and must never be committed.
+- A screenshot request is not local-only: the target URL is sent to the configured external screenshot provider. Review that provider's terms and privacy policy before enabling this feature in a deployment.
 
 ---
 
@@ -431,8 +476,8 @@ Real-time infrastructure reconnaissance displaying domain registration age from 
 ## Installation & Getting Started
 
 ### Prerequisites
-- **Node.js**: v20.x or higher (Node 22 LTS recommended)
-- **npm**: v10.x or higher
+- **Node.js**: Node 22 LTS (the CI workflow uses Node 22; use a Vite 8-supported Node release)
+- **npm**: v10 or later
 
 ### 1. Clone the Repository
 ```bash
@@ -440,7 +485,7 @@ git clone https://github.com/aditya77288-web/fraud-link-detector.git
 cd fraud-link-detector
 ```
 
-This repository currently has no committed npm lockfile. Dependency versions can therefore resolve to newer compatible releases; add and validate a lockfile before relying on fully reproducible installs.
+This repository currently has no committed npm lockfile. `npm install` resolves compatible versions from `package.json`, so installs are not fully reproducible. A committed and CI-validated lockfile should be added before treating builds as dependency-pinned.
 
 ### 2. Install Dependencies
 ```bash
@@ -452,7 +497,7 @@ Copy the example environment configuration:
 ```bash
 cp .env.example .env
 ```
-*(All features function out-of-the-box in local heuristic mode if no API key is provided).*
+Local heuristic analysis works without external API keys. Safe Browsing and screenshot previews require their respective optional server-side keys for configured provider access. The server loads `.env` at startup.
 
 ### 4. Start Development Server
 ```bash
@@ -472,7 +517,7 @@ npm run start
 ### Available NPM Scripts
 - `npm run dev`: Starts the local development server with Vite middleware (`tsx server.ts`).
 - `npm run build`: Compiles production frontend bundle to `dist/` (`vite build`).
-- `npm run start`: Runs production server with pre-built static assets (`NODE_ENV=production tsx server.ts`).
+- `npm run start`: Runs production server with pre-built static assets (`NODE_ENV=production tsx server.ts`). On Windows PowerShell, if the script's Unix-style environment assignment is not supported by your shell, use `$env:NODE_ENV = 'production'` followed by `npx tsx server.ts`.
 - `npm run lint`: Performs TypeScript type checking (`tsc --noEmit`).
 - `npm test`: Runs the 129 currently defined automated unit and integration test cases (`tsx --test ...`).
 - `npm run clean`: Cleans build output directories (`rm -rf dist server.js`).
@@ -481,13 +526,13 @@ npm run start
 
 ## Environment Configuration
 
-Configuration variables defined in `.env.example`:
+Runtime configuration variables (the `.env.example` file contains the supported application settings):
 
 | Variable | Required | Default | Feature Dependency & Behavioral Effect |
 |:---|:---:|:---:|:---|
 | `PORT` | Optional | `3000` | HTTP port on which the Express server listens. |
 | `NODE_ENV` | Optional | `development` | Set to `production` when running the pre-compiled bundle from `dist/`. |
-| `TRUST_PROXY` | Optional | `1` | Controls Express reverse-proxy trust (`app.set('trust proxy', ...)`). Keep `1` only when exactly one trusted proxy hop is present. Set to `false` when directly exposed. Incorrect settings can undermine IP-based rate limiting. |
+| `TRUST_PROXY` | Optional | `1` in code; `.env.example` sets `false` for local use | Controls Express reverse-proxy trust. Set to `1` only behind exactly one trusted proxy hop; use `false` when directly exposed. Incorrect settings can undermine IP-based rate limiting. |
 | `GOOGLE_SAFE_BROWSING_API_KEY` | Optional | None | API key for Google Safe Browsing Lookup API v4 (`threatMatches:find`). If omitted, `/api/threat-check` returns `configured: false`, and the application runs in offline structural heuristic mode. |
 | `SCREENSHOT_API_KEY` | Optional | None | API key for external screenshot rendering via Microlink API. If omitted, the server uses Microlink's public free-tier. |
 
@@ -540,13 +585,29 @@ To maintain realistic security expectations, the application enforces and disclo
 
 ---
 
-## Responsible Disclosure & Security Guarantees
+## Contributing
+
+Contributions are welcome. Before opening a pull request:
+
+1. Open or review an issue describing the bug or proposed change.
+2. Keep changes focused and avoid adding external services or collecting user data without documenting the privacy impact.
+3. Add or update tests for behavior changes, especially URL parsing, network boundaries, timeouts, and error states.
+4. Run the local verification commands (`npm test`, `npm run lint`, and `npm run build`).
+5. Describe the threat model, test evidence, and any known limitations in the pull request.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow.
+
+---
+
+## Security Reporting
+
+Please do not publish exploit details for an unpatched vulnerability in a public issue. Follow the private reporting guidance in [SECURITY.md](SECURITY.md).
 
 ### Disclaimer
 > **Important**: Fraud Link Detector is a heuristic analysis and investigative assistance tool. A clean scan or low risk score **does not guarantee that a URL is safe or free from malicious intent**. Always exercise sound judgment before entering credentials or executing downloads. This project has not been independently audited or certified by a third-party security firm.
 
 ### Reporting Vulnerabilities
-If you identify a security flaw or vulnerability within this application (particularly regarding SSRF bypasses or parsing logic), please disclose it responsibly. Do not open public issues for zero-day vulnerabilities. Please submit a private security advisory through GitHub or contact the repository maintainers directly.
+If you identify a security flaw or vulnerability within this application (particularly regarding SSRF, DNS handling, redirect inspection, or URL parsing), please follow the private disclosure process in [SECURITY.md](SECURITY.md).
 
 ---
 
