@@ -1,3 +1,5 @@
+import { lookup } from 'node:dns/promises';
+import { isIP } from 'node:net';
 import {
   isSpecialUseHostname,
   isSpecialUseIpv4,
@@ -11,6 +13,51 @@ export const MAX_IMAGE_BUFFER_BYTES = 2 * 1024 * 1024; // 2 MB ceiling
 
 export interface FetchFunction {
   (input: string | URL | Request, init?: RequestInit): Promise<Response>;
+}
+
+export type ScreenshotHostResolver = (hostname: string) => Promise<string[]>;
+
+const defaultScreenshotHostResolver: ScreenshotHostResolver = async (hostname) => {
+  const records = await lookup(hostname, { all: true, verbatim: true });
+  return records.map((record) => record.address);
+};
+
+const DNS_LOOKUP_TIMEOUT_MS = 3000;
+
+/**
+ * Fail closed unless every resolved address is a public IP. This is a pre-flight
+ * check only: Microlink performs the target render on its own infrastructure, so
+ * this application cannot pin the provider's eventual target socket.
+ */
+async function isPublicScreenshotHost(
+  hostname: string,
+  resolver: ScreenshotHostResolver
+): Promise<boolean> {
+  const normalized = hostname.toLowerCase().replace(/^\\[|\\]$/g, '');
+  if (isSpecialUseHostname(normalized)) return false;
+
+  if (isIP(normalized)) {
+    return !isSpecialUseIpv4(normalized) && !isSpecialUseIpv6(normalized);
+  }
+
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    const addresses = await Promise.race([
+      resolver(normalized),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error('DNS lookup timed out')), DNS_LOOKUP_TIMEOUT_MS);
+      }),
+    ]);
+    return addresses.length > 0 && addresses.every((address) =>
+      isIP(address) !== 0 &&
+      !isSpecialUseIpv4(address) &&
+      !isSpecialUseIpv6(address)
+    );
+  } catch {
+    return false;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 /**
@@ -127,7 +174,8 @@ export async function readLimitedBuffer(
 export async function captureWebsiteScreenshot(
   rawUrl: string,
   apiKey?: string,
-  fetchFn: FetchFunction = fetch
+  fetchFn: FetchFunction = fetch,
+  hostResolver: ScreenshotHostResolver = defaultScreenshotHostResolver
 ): Promise<{ status: number; body: ScreenshotResult }> {
   // 1. URL format & scheme validation (strictly http or https)
   const validation = validateThreatCheckUrl(rawUrl);
@@ -157,12 +205,17 @@ export async function captureWebsiteScreenshot(
 
   // 2. Pre-flight SSRF Guard: reject local loopback, private RFC 1918, CGNAT, link-local, and cloud metadata addresses
   const host = parsed.hostname.toLowerCase();
-  if (isSpecialUseHostname(host) || isSpecialUseIpv4(host) || isSpecialUseIpv6(host)) {
+  if (
+    isSpecialUseHostname(host) ||
+    isSpecialUseIpv4(host) ||
+    isSpecialUseIpv6(host) ||
+    !(await isPublicScreenshotHost(host, hostResolver))
+  ) {
     return {
       status: 400,
       body: {
         status: 'blocked_special_use',
-        error: 'Visual preview is blocked: destination is a local loopback, private network, or special-use address.',
+        error: 'Visual preview is blocked: destination does not resolve exclusively to public IP addresses.',
       },
     };
   }
@@ -265,19 +318,28 @@ export async function captureWebsiteScreenshot(
       }
 
       const imgHost = parsedImgUrl.hostname.toLowerCase();
-      if (isSpecialUseHostname(imgHost) || isSpecialUseIpv4(imgHost) || isSpecialUseIpv6(imgHost)) {
+      if (
+        isSpecialUseHostname(imgHost) ||
+        isSpecialUseIpv4(imgHost) ||
+        isSpecialUseIpv6(imgHost) ||
+        !(await isPublicScreenshotHost(imgHost, hostResolver))
+      ) {
         clearTimeout(timeoutId);
         return {
           status: 502,
           body: {
             status: 'error',
-            error: 'Screenshot provider returned a restricted or internal image host.',
+            error: 'Screenshot provider returned an image host that does not resolve exclusively to public IP addresses.',
           },
         };
       }
 
-      // Fetch the binary image through the same global timeout controller
-      const imgRes = await fetchFn(imageUrl, { signal: controller.signal });
+      // Do not follow provider-controlled redirects: the redirect destination
+      // would otherwise bypass the hostname and DNS checks above.
+      const imgRes = await fetchFn(imageUrl, {
+        signal: controller.signal,
+        redirect: 'error',
+      });
 
       if (!imgRes.ok) {
         clearTimeout(timeoutId);
