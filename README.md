@@ -554,7 +554,7 @@ In your Vercel project dashboard, navigate to **Settings > Environment Variables
 
 | Variable | Description | Recommended Scope |
 |:---|:---|:---|
-| `GOOGLE_SAFE_BROWSING_API_KEY` | *(Optional)* Google Safe Browsing Lookup API v4 key for malware/phishing queries. | Production, Preview, Development |
+| `GOOGLE_SAFE_BROWSING_API_KEY` | *(Optional)* Google Safe Browsing Lookup API v5 key for malware/phishing queries. | Production, Preview, Development |
 | `SCREENSHOT_API_KEY` | *(Optional)* Microlink API key for website screenshots. | Production, Preview, Development |
 | `TRUST_PROXY` | Set to `1` or `true` so Express recognizes Vercel's reverse proxy and extracts real client IPs for rate limiting. | Production, Preview, Development |
 
@@ -571,7 +571,7 @@ Runtime configuration variables (the `.env.example` file contains the supported 
 | `PORT` | Optional | `3000` | HTTP port on which the Express server listens. |
 | `NODE_ENV` | Optional | `development` | Set to `production` when running the pre-compiled bundle from `dist/`. |
 | `TRUST_PROXY` | Optional | `1` in code; `.env.example` sets `false` for local use | Controls Express reverse-proxy trust. Set to `1` only behind exactly one trusted proxy hop; use `false` when directly exposed. Incorrect settings can undermine IP-based rate limiting. |
-| `GOOGLE_SAFE_BROWSING_API_KEY` | Optional | None | API key for Google Safe Browsing Lookup API v4 (`threatMatches:find`). If omitted, `/api/threat-check` returns `configured: false`, and the application runs in offline structural heuristic mode. |
+| `GOOGLE_SAFE_BROWSING_API_KEY` | Optional | None | API key for Google Safe Browsing Lookup API v5 (`GET /v5/urls:search`). If omitted, `/api/threat-check` returns `configured: false`, and the application runs in offline structural heuristic mode. |
 | `SCREENSHOT_API_KEY` | Optional | None | API key for external screenshot rendering via Microlink API. If omitted, the server uses Microlink's public free-tier. |
 
 > **Security Note**: Never commit actual API keys or `.env` files containing secrets to version control.

@@ -119,23 +119,23 @@ test('validateThreatCheckUrl removes embedded user credentials before sending up
 });
 
 // 8. Mocked Upstream Tests: Safe handling of threat detection, clean results, and errors
-test('querySafeBrowsing: Mocked upstream threat match returns isThreat true', async () => {
-  const mockFetch: typeof fetch = async (url, options) => {
-    // Assert request includes correct payload schema
-    const body = JSON.parse(options?.body as string);
-    assert.equal(body.client.clientId, 'fraud-link-detector');
-    assert.ok(body.threatInfo.threatTypes.includes('SOCIAL_ENGINEERING'));
+test('querySafeBrowsing: Mocked upstream v5 threat match returns isThreat true', async () => {
+  const mockFetch: typeof fetch = async (url) => {
+    // Assert request is GET with correct v5 URL search parameter and key
+    assert.ok(typeof url === 'string');
+    assert.ok(url.startsWith('https://safebrowsing.googleapis.com/v5/urls:search?'));
+    assert.ok(url.includes('urls[]='));
+    assert.ok(url.includes('key=test-fake-key'));
 
     return new Response(
       JSON.stringify({
-        matches: [
+        threats: [
           {
-            threatType: 'SOCIAL_ENGINEERING',
-            platformType: 'ANY_PLATFORM',
-            threat: { url: 'https://malicious-phish.net/login' },
-            cacheDuration: '300s',
+            url: 'https://malicious-phish.net/login',
+            threatTypes: ['SOCIAL_ENGINEERING'],
           },
         ],
+        cacheDuration: '300s',
       }),
       { status: 200, headers: { 'Content-Type': 'application/json' } }
     );
@@ -147,12 +147,41 @@ test('querySafeBrowsing: Mocked upstream threat match returns isThreat true', as
   assert.equal(result.body.checked, true);
   assert.equal(result.body.isThreat, true);
   assert.deepEqual(result.body.threatTypes, ['SOCIAL_ENGINEERING']);
+  assert.equal(result.body.cacheDuration, '300s');
 });
 
-test('querySafeBrowsing: Mocked upstream clean result returns isThreat false', async () => {
+test('querySafeBrowsing: Mocked upstream v5 multiple threat types returns deduplicated list', async () => {
   const mockFetch: typeof fetch = async () => {
-    // Upstream returns empty object when no threat matches found
-    return new Response(JSON.stringify({}), {
+    return new Response(
+      JSON.stringify({
+        threats: [
+          {
+            url: 'https://multi-threat.net/',
+            threatTypes: ['MALWARE', 'SOCIAL_ENGINEERING'],
+          },
+          {
+            url: 'https://multi-threat.net/path',
+            threatTypes: ['MALWARE', 'UNWANTED_SOFTWARE'],
+          },
+        ],
+        cacheDuration: '60s',
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    );
+  };
+
+  const result = await querySafeBrowsing('https://multi-threat.net/', 'test-fake-key', mockFetch);
+  assert.equal(result.status, 200);
+  assert.equal(result.body.isThreat, true);
+  assert.deepEqual(result.body.threatTypes?.sort(), ['MALWARE', 'SOCIAL_ENGINEERING', 'UNWANTED_SOFTWARE'].sort());
+});
+
+test('querySafeBrowsing: Mocked upstream v5 clean result returns isThreat false', async () => {
+  const mockFetch: typeof fetch = async (url) => {
+    assert.ok(typeof url === 'string');
+    assert.ok(url.includes('urls[]='));
+
+    return new Response(JSON.stringify({ threats: [], cacheDuration: '3600s' }), {
       status: 200,
       headers: { 'Content-Type': 'application/json' },
     });
@@ -164,6 +193,7 @@ test('querySafeBrowsing: Mocked upstream clean result returns isThreat false', a
   assert.equal(result.body.checked, true);
   assert.equal(result.body.isThreat, false);
   assert.deepEqual(result.body.threatTypes, []);
+  assert.equal(result.body.cacheDuration, '3600s');
 });
 
 test('querySafeBrowsing: Mocked upstream 500 error returns safe 502 without leaking key', async () => {

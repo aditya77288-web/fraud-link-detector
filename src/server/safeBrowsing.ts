@@ -153,7 +153,8 @@ export function createRateLimiter(maxRequests = 60, windowMs = 60000) {
 }
 
 /**
- * Queries the official Google Safe Browsing v4 threatMatches:find API.
+ * Queries the official Google Safe Browsing v5 urls:search API.
+ * Method: GET https://safebrowsing.googleapis.com/v5/urls:search?urls[]=...&key=...
  * Never logs or exposes the API key or sensitive parameters.
  */
 export async function querySafeBrowsing(
@@ -173,33 +174,11 @@ export async function querySafeBrowsing(
     };
   }
 
-  const endpoint = `https://safebrowsing.googleapis.com/v4/threatMatches:find?key=${encodeURIComponent(apiKey.trim())}`;
-
-  const payload = {
-    client: {
-      clientId: 'fraud-link-detector',
-      clientVersion: '1.0.0',
-    },
-    threatInfo: {
-      threatTypes: [
-        'MALWARE',
-        'SOCIAL_ENGINEERING',
-        'UNWANTED_SOFTWARE',
-        'POTENTIALLY_HARMFUL_APPLICATION',
-      ],
-      platformTypes: ['ANY_PLATFORM'],
-      threatEntryTypes: ['URL'],
-      threatEntries: [{ url: sanitizedUrl }],
-    },
-  };
+  const endpoint = `https://safebrowsing.googleapis.com/v5/urls:search?urls[]=${encodeURIComponent(sanitizedUrl)}&key=${encodeURIComponent(apiKey.trim())}`;
 
   try {
     const response = await fetchFn(endpoint, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(payload),
+      method: 'GET',
       signal: AbortSignal.timeout(5000), // 5-second timeout
     });
 
@@ -216,11 +195,19 @@ export async function querySafeBrowsing(
       };
     }
 
-    const data = await response.json();
-    const matches = Array.isArray(data.matches) ? data.matches : [];
-    const isThreat = matches.length > 0;
+    const data = (await response.json()) as {
+      threats?: Array<{ url?: string; threatTypes?: string[] }>;
+      cacheDuration?: string;
+    };
+
+    const threats = Array.isArray(data.threats) ? data.threats : [];
+    const isThreat = threats.length > 0;
     const threatTypes: string[] = Array.from(
-      new Set(matches.map((m: { threatType?: string }) => m.threatType).filter(Boolean))
+      new Set(
+        threats
+          .flatMap((t) => (Array.isArray(t.threatTypes) ? t.threatTypes : []))
+          .filter(Boolean)
+      )
     );
 
     return {
@@ -230,7 +217,7 @@ export async function querySafeBrowsing(
         checked: true,
         isThreat,
         threatTypes,
-        cacheDuration: matches[0]?.cacheDuration,
+        cacheDuration: data.cacheDuration,
         evaluatedAt: new Date().toISOString(),
       },
     };
