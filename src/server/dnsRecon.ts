@@ -360,13 +360,36 @@ export async function performRdapLookup(
   }
 
   if (!registrationDate) {
-    console.error(`RDAP diagnostic classification [REDACTED]: endpoint host ${endpointHostname}, Content-Type: ${contentType} (registration date not disclosed by registry)`);
-    return {
-      status: 'redacted',
-      registrar,
-      expirationDate,
-      message: 'Registration date is not published by registry or is redacted for privacy.',
-    };
+    const hasExplicitRedaction =
+      Boolean((json as { redacted?: unknown }).redacted) ||
+      (Array.isArray((json as { remarks?: Array<{ description?: string[] }> }).remarks) &&
+        (json as { remarks?: Array<{ description?: string[] }> }).remarks!.some((r) =>
+          Array.isArray(r.description) &&
+          r.description.some((d) => /redacted|privacy|withheld|protected/i.test(d))
+        )) ||
+      (Array.isArray((json as { notices?: Array<{ description?: string[] }> }).notices) &&
+        (json as { notices?: Array<{ description?: string[] }> }).notices!.some((n) =>
+          Array.isArray(n.description) &&
+          n.description.some((d) => /redacted|privacy|withheld|protected/i.test(d))
+        ));
+
+    if (hasExplicitRedaction) {
+      console.error(`RDAP diagnostic classification [REDACTED]: endpoint host ${endpointHostname}, Content-Type: ${contentType} (explicit redaction indicators present)`);
+      return {
+        status: 'redacted',
+        registrar,
+        expirationDate,
+        message: 'Registration date is explicitly redacted or withheld under registry privacy policy.',
+      };
+    } else {
+      console.error(`RDAP diagnostic classification [UNAVAILABLE]: endpoint host ${endpointHostname}, Content-Type: ${contentType} (no registration date and no explicit redaction evidence)`);
+      return {
+        status: 'unavailable',
+        registrar,
+        expirationDate,
+        message: 'Registration date could not be determined from the available response.',
+      };
+    }
   }
 
   return {
@@ -426,9 +449,18 @@ export function generateReconFindings(
       id: 'recon-rdap-redacted',
       category: 'notice',
       severity: 'neutral',
-      title: 'Registration Date Redacted',
+      title: 'Registration Date Explicitly Redacted',
       explanation:
-        'Registration dates are not published or are withheld under registry privacy policies. This is common and does not indicate malicious intent.',
+        'Registration date is explicitly redacted or withheld by the registry under privacy policies. This is standard and does not indicate malicious intent.',
+    });
+  } else if (rdap.status === 'unavailable') {
+    findings.push({
+      id: 'recon-rdap-unavailable',
+      category: 'notice',
+      severity: 'neutral',
+      title: 'Registration Date Unavailable',
+      explanation:
+        'Registration date could not be determined from the available RDAP response. This is common for certain TLDs and does not indicate malicious intent.',
     });
   } else if (rdap.status === 'unsupported') {
     findings.push({

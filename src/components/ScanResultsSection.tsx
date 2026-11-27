@@ -750,6 +750,8 @@ export function ScanResultsSection({
                               ? `${reconState.data.rdap.domainAgeDays.toLocaleString()} days`
                               : reconState.data.rdap.status === 'redacted'
                               ? 'Date Redacted'
+                              : reconState.data.rdap.status === 'unavailable'
+                              ? 'Unavailable'
                               : reconState.data.rdap.status === 'unsupported'
                               ? 'TLD Unsupported'
                               : reconState.data.rdap.status === 'timeout'
@@ -766,7 +768,9 @@ export function ScanResultsSection({
                           {reconState.data.rdap.registrationDate
                             ? `Registered on ${new Date(reconState.data.rdap.registrationDate).toLocaleDateString()}`
                             : reconState.data.rdap.status === 'redacted'
-                            ? 'Registration date not disclosed by registry.'
+                            ? 'Registration date explicitly redacted by registry.'
+                            : reconState.data.rdap.status === 'unavailable'
+                            ? 'Registration date could not be determined from the available response.'
                             : reconState.data.rdap.status === 'unsupported'
                             ? 'Domain or registry does not provide the requested RDAP data.'
                             : reconState.data.rdap.status === 'timeout'

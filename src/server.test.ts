@@ -362,7 +362,22 @@ test('performRdapLookup: distinguishes available state when registration date is
   assert.equal(result.registrar, 'Test Registrar');
 });
 
-test('performRdapLookup: distinguishes redacted state when registration date is missing', async () => {
+test('performRdapLookup: distinguishes redacted state when explicit redaction metadata is present', async () => {
+  const mockFetch: typeof fetch = async () => {
+    return new Response(
+      JSON.stringify({
+        events: [],
+        entities: [],
+        remarks: [{ description: ['redacted under privacy policy'] }],
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    );
+  };
+  const result = await performRdapLookup('example.com', mockFetch);
+  assert.equal(result.status, 'redacted');
+});
+
+test('performRdapLookup: distinguishes unavailable state when registration date is missing and no explicit redaction metadata is present', async () => {
   const mockFetch: typeof fetch = async () => {
     return new Response(
       JSON.stringify({
@@ -373,7 +388,7 @@ test('performRdapLookup: distinguishes redacted state when registration date is 
     );
   };
   const result = await performRdapLookup('example.com', mockFetch);
-  assert.equal(result.status, 'redacted');
+  assert.equal(result.status, 'unavailable');
 });
 
 test('performRdapLookup: distinguishes unsupported state on 404', async () => {
@@ -412,11 +427,14 @@ test('performRdapLookup: distinguishes MALFORMED_JSON on invalid json', async ()
   assert.ok(result.message?.includes('Invalid RDAP JSON'));
 });
 
-test('querySafeBrowsing: classifies KEY_RESTRICTIONS, API_NOT_ENABLED, and QUOTA_EXCEEDED correctly co-safeguarding secrets', async () => {
+test('querySafeBrowsing: classifies all error categories co-safeguarding secrets and returning generic frontend error', async () => {
   const testCases = [
-    { status: 403, body: { error: { code: 403, status: 'PERMISSION_DENIED', message: 'API key restricted by HTTP referrers' } } },
     { status: 403, body: { error: { code: 403, status: 'SERVICE_DISABLED', message: 'Safe Browsing API is not enabled' } } },
+    { status: 403, body: { error: { code: 403, status: 'API_KEY_INVALID', message: 'API key not valid. Please pass a valid API key.' } } },
+    { status: 403, body: { error: { code: 403, status: 'PERMISSION_DENIED', message: 'API key restricted by HTTP referrers' } } },
     { status: 429, body: { error: { code: 429, status: 'RESOURCE_EXHAUSTED', message: 'Quota exceeded for quota metric' } } },
+    { status: 400, body: { error: { code: 400, status: 'INVALID_ARGUMENT', message: 'Invalid argument value' } } },
+    { status: 403, body: { error: { code: 403, status: 'PERMISSION_DENIED', message: 'Caller does not have permission' } } },
   ];
 
   for (const tc of testCases) {
@@ -430,6 +448,7 @@ test('querySafeBrowsing: classifies KEY_RESTRICTIONS, API_NOT_ENABLED, and QUOTA
     assert.ok(!JSON.stringify(result.body).includes('secret-target.com'));
   }
 });
+
 
 
 

@@ -9,6 +9,7 @@ export type DnsResolutionStatus =
 export type RdapStatus =
   | 'available'
   | 'redacted'
+  | 'unavailable'
   | 'unsupported'
   | 'timeout'
   | 'error'

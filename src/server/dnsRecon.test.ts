@@ -7,6 +7,7 @@ import {
   performDnsRecon,
   performRdapLookup,
   performFullRecon,
+  generateReconFindings,
   DnsResolverInterface,
 } from './dnsRecon.js';
 
@@ -149,6 +150,7 @@ test('RDAP: Handles 404/501 as unsupported and missing dates as redacted', async
       JSON.stringify({
         entities: [{ roles: ['registrar'], handle: 'Privacy Registrar' }],
         events: [],
+        remarks: [{ description: ['redacted for privacy'] }],
       }),
       { status: 200 }
     );
@@ -265,8 +267,8 @@ test('SSRF Protection: Detects mixed public and private IP resolution (DNS rebin
   assert.ok(result.findings.some((f) => f.title.includes('DNS Rebinding Risk')));
 });
 
-// 17. Comprehensive RDAP Status Contract Tests (available, redacted, unsupported, timeout, error)
-test('RDAP Status Contract: Distinguishes available, redacted, unsupported, timeout, and error', async () => {
+// 17. Comprehensive RDAP Status Contract Tests (available, redacted, unavailable, unsupported, timeout, error)
+test('RDAP Status Contract: Distinguishes available, redacted, unavailable, unsupported, timeout, and error', async () => {
   // 1. available
   const availableFetch: typeof fetch = async () => new Response(JSON.stringify({
     events: [{ eventAction: 'registration', eventDate: '2015-06-15T00:00:00Z' }]
@@ -275,33 +277,48 @@ test('RDAP Status Contract: Distinguishes available, redacted, unsupported, time
   assert.equal(r1.status, 'available');
   assert.ok(r1.registrationDate);
 
-  // 2. redacted (successful parse, but no registration date)
+  // 2. redacted (explicit redaction property or notice/remark)
   const redactedFetch: typeof fetch = async () => new Response(JSON.stringify({
-    events: []
+    events: [],
+    remarks: [{ description: ['Registration data withheld under privacy policy'] }]
   }), { status: 200, headers: { 'Content-Type': 'application/json' } });
   const r2 = await performRdapLookup('test.com', redactedFetch);
   assert.equal(r2.status, 'redacted');
-  assert.ok(r2.message?.includes('not published by registry') || r2.message?.includes('privacy'));
 
-  // 3. unsupported (404/501)
+  // 3. unavailable (no registration date and no explicit redaction metadata)
+  const unavailableFetch: typeof fetch = async () => new Response(JSON.stringify({
+    events: [],
+    remarks: []
+  }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  const r3 = await performRdapLookup('test.com', unavailableFetch);
+  assert.equal(r3.status, 'unavailable');
+
+  // Findings generation tests for redacted and unavailable
+  const findingsRedacted = generateReconFindings('test.com', false, { status: 'resolved', aRecords: ['1.2.3.4'], aaaaRecords: [], mxRecords: [], aCount: 1, aaaaCount: 0, mxCount: 0, hasMailExchange: false }, { status: 'redacted' });
+  assert.ok(findingsRedacted.some(f => f.id === 'recon-rdap-redacted'));
+
+  const findingsUnavailable = generateReconFindings('test.com', false, { status: 'resolved', aRecords: ['1.2.3.4'], aaaaRecords: [], mxRecords: [], aCount: 1, aaaaCount: 0, mxCount: 0, hasMailExchange: false }, { status: 'unavailable' });
+  assert.ok(findingsUnavailable.some(f => f.id === 'recon-rdap-unavailable'));
+
+  // 4. unsupported (404/501)
   const unsupportedFetch: typeof fetch = async () => new Response('Not Found', { status: 404 });
-  const r3 = await performRdapLookup('test.cc', unsupportedFetch);
-  assert.equal(r3.status, 'unsupported');
+  const r4 = await performRdapLookup('test.cc', unsupportedFetch);
+  assert.equal(r4.status, 'unsupported');
 
-  // 4. timeout
+  // 5. timeout
   const timeoutFetch: typeof fetch = async () => {
     const err = new Error('Timeout');
     err.name = 'TimeoutError';
     throw err;
   };
-  const r4 = await performRdapLookup('test.com', timeoutFetch);
-  assert.equal(r4.status, 'timeout');
+  const r5 = await performRdapLookup('test.com', timeoutFetch);
+  assert.equal(r5.status, 'timeout');
 
-  // 5. error (HTTP 500)
+  // 6. error (HTTP 500)
   const errorFetch: typeof fetch = async () => new Response('Error', { status: 500 });
-  const r5 = await performRdapLookup('test.com', errorFetch);
-  assert.equal(r5.status, 'error');
-  assert.ok(!r5.message?.includes('privacy')); // ensure error is never classified as privacy redaction
+  const r6 = await performRdapLookup('test.com', errorFetch);
+  assert.equal(r6.status, 'error');
+  assert.ok(!r6.message?.includes('privacy'));
 });
 
 

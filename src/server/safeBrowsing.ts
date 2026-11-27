@@ -200,16 +200,33 @@ export async function querySafeBrowsing(
           errorDetail = ` (${errorStatus || errorCode}: ${errorMessage})`;
 
           const lowerMsg = errorMessage.toLowerCase();
-          if (errorCode === 403 && (lowerMsg.includes('restricted') || lowerMsg.includes('restriction') || errorStatus === 'PERMISSION_DENIED')) {
-            errorCategory = 'KEY_RESTRICTIONS';
-          } else if (errorCode === 403 || lowerMsg.includes('api key') || lowerMsg.includes('api_key_invalid')) {
-            errorCategory = 'API_KEY_INVALID';
-          } else if (lowerMsg.includes('not enabled') || lowerMsg.includes('service_disabled') || errorStatus === 'SERVICE_DISABLED') {
+          const lowerStatus = errorStatus.toLowerCase();
+          const hasReason = (reason: string) =>
+            lowerMsg.includes(reason.toLowerCase()) ||
+            lowerStatus.includes(reason.toLowerCase());
+
+          if (hasReason('SERVICE_DISABLED') || lowerMsg.includes('not enabled') || lowerStatus === 'service_disabled') {
             errorCategory = 'API_NOT_ENABLED';
-          } else if (errorCode === 400 || errorStatus === 'INVALID_ARGUMENT' || lowerMsg.includes('invalid argument')) {
-            errorCategory = 'INVALID_ARGUMENT';
-          } else if (errorCode === 429 || lowerMsg.includes('quota') || lowerMsg.includes('resource_exhausted') || errorStatus === 'RESOURCE_EXHAUSTED') {
+          } else if (
+            hasReason('API_KEY_INVALID') ||
+            hasReason('INVALID_API_KEY') ||
+            lowerMsg.includes('api key not valid') ||
+            lowerMsg.includes('api_key_invalid')
+          ) {
+            errorCategory = 'API_KEY_INVALID';
+          } else if (
+            hasReason('KEY_RESTRICTIONS') ||
+            hasReason('API_KEY_RESTRICTED') ||
+            lowerMsg.includes('restricted') ||
+            lowerMsg.includes('restriction')
+          ) {
+            errorCategory = 'KEY_RESTRICTIONS';
+          } else if (errorCode === 429 || hasReason('RESOURCE_EXHAUSTED') || lowerMsg.includes('quota') || lowerStatus === 'resource_exhausted') {
             errorCategory = 'QUOTA_EXCEEDED';
+          } else if (errorCode === 400 || hasReason('INVALID_ARGUMENT') || lowerMsg.includes('invalid argument') || lowerStatus === 'invalid_argument') {
+            errorCategory = 'INVALID_ARGUMENT';
+          } else if (errorCode === 403 || hasReason('PERMISSION_DENIED') || lowerStatus === 'permission_denied') {
+            errorCategory = 'PERMISSION_DENIED';
           }
         }
       } catch {
