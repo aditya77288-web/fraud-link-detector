@@ -4,6 +4,7 @@ import {
   validateThreatCheckUrl,
   querySafeBrowsing,
 } from './server/safeBrowsing.js';
+import { performRdapLookup } from './server/dnsRecon.js';
 
 const SERVER_BASE = 'http://localhost:3000';
 
@@ -343,5 +344,55 @@ test('API Security Headers: Endpoints include protective headers and Cache-Contr
   assert.equal(errRes.headers.get('cache-control'), 'no-store');
   assert.equal(errRes.headers.get('x-content-type-options'), 'nosniff');
 });
+
+// 14. RDAP States and Safe Browsing Error Handling
+test('performRdapLookup: distinguishes available state when registration date is present', async () => {
+  const mockFetch: typeof fetch = async () => {
+    return new Response(
+      JSON.stringify({
+        events: [{ eventAction: 'registration', eventDate: '2020-01-01T00:00:00Z' }],
+        entities: [{ roles: ['registrar'], vcardArray: ['vcard', [['fn', {}, 'text', 'Test Registrar']]] }],
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    );
+  };
+  const result = await performRdapLookup('example.com', mockFetch);
+  assert.equal(result.status, 'available');
+  assert.equal(result.registrationDate, '2020-01-01T00:00:00Z');
+  assert.equal(result.registrar, 'Test Registrar');
+});
+
+test('performRdapLookup: distinguishes redacted state when registration date is missing', async () => {
+  const mockFetch: typeof fetch = async () => {
+    return new Response(
+      JSON.stringify({
+        events: [],
+        entities: [],
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    );
+  };
+  const result = await performRdapLookup('example.com', mockFetch);
+  assert.equal(result.status, 'redacted');
+});
+
+test('performRdapLookup: distinguishes unsupported state on 404', async () => {
+  const mockFetch: typeof fetch = async () => {
+    return new Response('Not Found', { status: 404 });
+  };
+  const result = await performRdapLookup('example.test', mockFetch);
+  assert.equal(result.status, 'unsupported');
+});
+
+test('performRdapLookup: distinguishes timeout state', async () => {
+  const mockFetch: typeof fetch = async () => {
+    const err = new Error('Timeout');
+    err.name = 'TimeoutError';
+    throw err;
+  };
+  const result = await performRdapLookup('example.com', mockFetch);
+  assert.equal(result.status, 'timeout');
+});
+
 
 

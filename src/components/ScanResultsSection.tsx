@@ -752,6 +752,10 @@ export function ScanResultsSection({
                               ? 'Date Redacted'
                               : reconState.data.rdap.status === 'unsupported'
                               ? 'TLD Unsupported'
+                              : reconState.data.rdap.status === 'timeout'
+                              ? 'Lookup Timed Out'
+                              : reconState.data.rdap.status === 'error'
+                              ? 'Lookup Failed'
                               : reconState.data.isIpAddress
                               ? 'Direct IP'
                               : 'Unavailable'}
@@ -761,9 +765,17 @@ export function ScanResultsSection({
                         <p className="text-xs text-slate-400 mt-2">
                           {reconState.data.rdap.registrationDate
                             ? `Registered on ${new Date(reconState.data.rdap.registrationDate).toLocaleDateString()}`
+                            : reconState.data.rdap.status === 'redacted'
+                            ? 'Registration date not disclosed by registry.'
+                            : reconState.data.rdap.status === 'unsupported'
+                            ? 'Domain or registry does not provide the requested RDAP data.'
+                            : reconState.data.rdap.status === 'timeout'
+                            ? 'RDAP request timed out after 4 seconds.'
+                            : reconState.data.rdap.status === 'error'
+                            ? 'RDAP request failed.'
                             : reconState.data.rdap.registrar
                             ? `Registrar: ${reconState.data.rdap.registrar}`
-                            : 'Withheld under privacy policy or not disclosed by registry.'}
+                            : 'Registration data unavailable.'}
                         </p>
                       </div>
 
