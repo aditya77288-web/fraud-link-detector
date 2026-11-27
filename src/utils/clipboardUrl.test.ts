@@ -126,3 +126,12 @@ test('readClipboardSafely: Reports friendly message when clipboard is empty', as
   assert.equal(result.urls.length, 0);
   assert.ok(result.message.includes('Clipboard is empty'));
 });
+
+// 13. extractUrlsFromText: Canonical deduplication of trailing slash variants
+test('extractUrlsFromText: Deduplicates URL candidates differing only by trailing slash (https://example.com and https://example.com/)', () => {
+  const text = 'Visit https://example.com and https://example.com/ or https://example.com';
+  const result = extractUrlsFromText(text);
+  assert.equal(result.status, 'single_url');
+  assert.equal(result.urls.length, 1);
+});
+

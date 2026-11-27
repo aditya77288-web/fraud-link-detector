@@ -174,7 +174,10 @@ export async function querySafeBrowsing(
     };
   }
 
-  const endpoint = `https://safebrowsing.googleapis.com/v5/urls:search?urls[]=${encodeURIComponent(sanitizedUrl)}&key=${encodeURIComponent(apiKey.trim())}`;
+  const endpointUrl = new URL('https://safebrowsing.googleapis.com/v5/urls:search');
+  endpointUrl.searchParams.append('urls[]', sanitizedUrl);
+  endpointUrl.searchParams.append('key', apiKey.trim());
+  const endpoint = endpointUrl.toString().replace(/urls%5B%5D/g, 'urls[]');
 
   try {
     const response = await fetchFn(endpoint, {

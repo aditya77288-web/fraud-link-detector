@@ -6,11 +6,6 @@ import {
   ReconFinding,
 } from '../types/recon.js';
 
-// Trusted RDAP base endpoints allowlist
-const TRUSTED_RDAP_BASE_URLS = [
-  'https://rdap.org/domain/',
-];
-
 /**
  * Checks whether an IPv4 address is in a reserved, private, or loopback range.
  */
@@ -59,13 +54,12 @@ export function isSpecialUseIpv6(ip: string): boolean {
   if (normalized.includes('.')) {
     const v4Part = normalized.split(':').pop() || '';
     if (isSpecialUseIpv4(v4Part)) return true;
-    // If it contains a dot and maps to a valid public IPv4 address, do not treat as special-use
     if (normalized.startsWith('::ffff:') || normalized.startsWith('0:0:0:0:0:ffff:') || normalized.startsWith('::')) {
       return false;
     }
   }
 
-  // Hex-encoded IPv4-mapped IPv6: ::ffff:w.x.y.z in hex, e.g. ::ffff:7f00:1 (127.0.0.1)
+  // Hex-encoded IPv4-mapped IPv6: ::ffff:w.x.y.z in hex
   if (normalized.startsWith('::ffff:') || normalized.startsWith('0:0:0:0:0:ffff:')) {
     const hexSuffix = normalized.replace(/^.*ffff:/, '');
     const hexParts = hexSuffix.split(':');
@@ -78,10 +72,10 @@ export function isSpecialUseIpv6(ip: string): boolean {
     return true;
   }
 
-  // Unique Local Addresses (fc00::/7 - starts with fc or fd)
+  // Unique Local Addresses (fc00::/7)
   if (normalized.startsWith('fc') || normalized.startsWith('fd')) return true;
 
-  // Link-local unicast (fe80::/10 - starts with fe8, fe9, fea, feb)
+  // Link-local unicast (fe80::/10)
   if (/^fe[89ab]/i.test(normalized)) return true;
 
   // Multicast (ff00::/8)
@@ -191,7 +185,6 @@ export async function performDnsRecon(
   const mxRecords: Array<{ exchange: string; priority: number }> =
     mxRes.status === 'fulfilled' ? mxRes.value : [];
 
-  // Check errors
   const isTimeout =
     (aRes.status === 'rejected' && aRes.reason?.name === 'TimeoutError') ||
     (aaaaRes.status === 'rejected' && aaaaRes.reason?.name === 'TimeoutError');
@@ -229,6 +222,100 @@ export async function performDnsRecon(
   };
 }
 
+interface IanaRdapBootstrapJson {
+  version: string;
+  publication: string;
+  services: Array<[string[], string[]]>;
+}
+
+let bootstrapCache: {
+  data: IanaRdapBootstrapJson | null;
+  timestamp: number;
+} = {
+  data: null,
+  timestamp: 0,
+};
+
+async function getIanaRdapBootstrap(fetchFn: typeof fetch): Promise<IanaRdapBootstrapJson | null> {
+  const now = Date.now();
+  // Cache TTL: 24 hours
+  if (bootstrapCache.data && now - bootstrapCache.timestamp < 86400000) {
+    return bootstrapCache.data;
+  }
+
+  try {
+    const res = await fetchFn('https://data.iana.org/rdap/dns.json', {
+      method: 'GET',
+      headers: { Accept: 'application/json' },
+      signal: AbortSignal.timeout(4000),
+    });
+    if (res.ok) {
+      const json = (await res.json()) as IanaRdapBootstrapJson;
+      if (json && Array.isArray(json.services)) {
+        bootstrapCache = { data: json, timestamp: now };
+        return json;
+      }
+    }
+  } catch (err) {
+    console.error('Failed to fetch IANA RDAP bootstrap registry:', err instanceof Error ? err.message : 'Unknown');
+  }
+
+  return bootstrapCache.data;
+}
+
+async function resolveRdapBaseUrl(domain: string, fetchFn: typeof fetch): Promise<string> {
+  const lowerDomain = domain.toLowerCase().trim();
+  const labels = lowerDomain.split('.');
+
+  const bootstrap = await getIanaRdapBootstrap(fetchFn);
+  if (bootstrap && Array.isArray(bootstrap.services)) {
+    let bestMatchUrl: string | null = null;
+    let maxMatchedLength = 0;
+
+    for (const [tldList, baseUrlList] of bootstrap.services) {
+      if (!Array.isArray(tldList) || !Array.isArray(baseUrlList)) continue;
+      for (const tld of tldList) {
+        const tldParts = tld.toLowerCase().split('.');
+        if (labels.length >= tldParts.length) {
+          const tail = labels.slice(labels.length - tldParts.length);
+          if (tail.join('.') === tldParts.join('.')) {
+            if (tldParts.length > maxMatchedLength) {
+              const httpsUrl = baseUrlList.find((u) => typeof u === 'string' && u.startsWith('https://'));
+              if (httpsUrl) {
+                maxMatchedLength = tldParts.length;
+                bestMatchUrl = httpsUrl;
+              }
+            }
+          }
+        }
+      }
+    }
+
+    if (bestMatchUrl) {
+      try {
+        const parsedBase = new URL(bestMatchUrl);
+        if (parsedBase.protocol === 'https:' && !isSpecialUseHostname(parsedBase.hostname)) {
+          return bestMatchUrl;
+        }
+      } catch {}
+    }
+  }
+
+  // Fallback defaults based on TLD
+  const tld = labels[labels.length - 1];
+  if (tld === 'com' || tld === 'net') {
+    return 'https://rdap.verisign.com/com/v1/';
+  } else if (tld === 'org') {
+    return 'https://rdap.publicinterestregistry.org/rdap/';
+  } else if (tld === 'gov') {
+    return 'https://rdap.nic.gov/';
+  } else if (tld === 'edu') {
+    return 'https://rdap.educause.edu/rdap/';
+  }
+
+  return 'https://rdap.org/domain/';
+}
+
 /**
  * Queries RDAP for domain registration information.
  */
@@ -245,8 +332,9 @@ export async function performRdapLookup(
     };
   }
 
-  // Construct request using trusted allowlist base
-  const rdapEndpoint = `${TRUSTED_RDAP_BASE_URLS[0]}${encodeURIComponent(trimmed)}`;
+  // Resolve authoritative RDAP base URL via IANA DNS bootstrap registry (RFC 9224)
+  const baseRdapUrl = await resolveRdapBaseUrl(trimmed, fetchFn);
+  const rdapEndpoint = `${baseRdapUrl.replace(/\/$/, '')}/${encodeURIComponent(trimmed)}`;
   let endpointHostname = 'rdap.org';
   try {
     endpointHostname = new URL(rdapEndpoint).hostname;

@@ -65,10 +65,20 @@ export function extractUrlsFromText(text: string): ClipboardExtractionResult {
   for (const rawMatch of matches) {
     const cleaned = cleanExtractedUrl(rawMatch);
     if (isValidUrl(cleaned)) {
-      const normalized = normalizeUrlString(cleaned);
-      if (!seen.has(normalized)) {
-        seen.add(normalized);
-        validUrls.push(cleaned);
+      try {
+        const normalized = normalizeUrlString(cleaned);
+        const parsedUrl = new URL(normalized);
+        const canonicalKey = parsedUrl.href;
+        if (!seen.has(canonicalKey)) {
+          seen.add(canonicalKey);
+          validUrls.push(cleaned);
+        }
+      } catch {
+        const normalized = normalizeUrlString(cleaned);
+        if (!seen.has(normalized)) {
+          seen.add(normalized);
+          validUrls.push(cleaned);
+        }
       }
     }
   }
@@ -78,7 +88,17 @@ export function extractUrlsFromText(text: string): ClipboardExtractionResult {
     if (!/\s/.test(trimmed) && isValidUrl(trimmed)) {
       const cleaned = cleanExtractedUrl(trimmed);
       if (isValidUrl(cleaned)) {
-        validUrls.push(cleaned);
+        try {
+          const normalized = normalizeUrlString(cleaned);
+          const parsedUrl = new URL(normalized);
+          const canonicalKey = parsedUrl.href;
+          if (!seen.has(canonicalKey)) {
+            seen.add(canonicalKey);
+            validUrls.push(cleaned);
+          }
+        } catch {
+          validUrls.push(cleaned);
+        }
       }
     }
   }
