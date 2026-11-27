@@ -247,108 +247,135 @@ export async function performRdapLookup(
 
   // Construct request using trusted allowlist base
   const rdapEndpoint = `${TRUSTED_RDAP_BASE_URLS[0]}${encodeURIComponent(trimmed)}`;
-
+  let endpointHostname = 'rdap.org';
   try {
-    const response = await fetchFn(rdapEndpoint, {
+    endpointHostname = new URL(rdapEndpoint).hostname;
+  } catch {}
+
+  let response: Response;
+  try {
+    response = await fetchFn(rdapEndpoint, {
       method: 'GET',
       headers: {
         Accept: 'application/rdap+json, application/json',
       },
       signal: AbortSignal.timeout(4000), // 4-second timeout
     });
-
-    if (response.status === 404 || response.status === 501) {
-      return {
-        status: 'unsupported',
-        message: 'RDAP information is not supported or not available for this TLD.',
-      };
-    }
-
-    if (!response.ok) {
-      return {
-        status: 'error',
-        message: `RDAP service returned status ${response.status}.`,
-      };
-    }
-
-    // Response size guard: check Content-Length if present (> 512KB rejected)
-    const contentLength = response.headers.get('content-length');
-    if (contentLength && parseInt(contentLength, 10) > 524288) {
-      return {
-        status: 'error',
-        message: 'RDAP response exceeded safety size limit.',
-      };
-    }
-
-    const json = await response.json();
-    if (!json || typeof json !== 'object') {
-      return {
-        status: 'error',
-        message: 'Invalid RDAP JSON payload received.',
-      };
-    }
-
-    // Extract registration and expiration events
-    const events = Array.isArray(json.events) ? json.events : [];
-    const regEvent = events.find((e: { eventAction?: string }) => e.eventAction === 'registration');
-    const expEvent = events.find((e: { eventAction?: string }) => e.eventAction === 'expiration');
-
-    const registrationDate: string | undefined = regEvent?.eventDate;
-    const expirationDate: string | undefined = expEvent?.eventDate;
-
-    // Extract registrar entity
-    let registrar: string | undefined;
-    const entities = Array.isArray(json.entities) ? json.entities : [];
-    const registrarEntity = entities.find((ent: { roles?: string[] }) =>
-      Array.isArray(ent.roles) && ent.roles.includes('registrar')
-    );
-
-    if (registrarEntity) {
-      if (registrarEntity.vcardArray && Array.isArray(registrarEntity.vcardArray[1])) {
-        const fnCard = registrarEntity.vcardArray[1].find((card: unknown[]) => card[0] === 'fn');
-        if (fnCard && typeof fnCard[3] === 'string') {
-          registrar = fnCard[3];
-        }
-      }
-      if (!registrar && typeof registrarEntity.handle === 'string') {
-        registrar = registrarEntity.handle;
-      }
-    }
-
-    let domainAgeDays: number | undefined;
-    if (registrationDate) {
-      const regTime = new Date(registrationDate).getTime();
-      if (!isNaN(regTime)) {
-        domainAgeDays = Math.max(0, Math.floor((Date.now() - regTime) / (1000 * 60 * 60 * 24)));
-      }
-    }
-
-    if (!registrationDate) {
-      return {
-        status: 'redacted',
-        registrar,
-        expirationDate,
-        message: 'Registration date is not published by registry or is redacted for privacy.',
-      };
-    }
-
-    return {
-      status: 'available',
-      registrationDate,
-      expirationDate,
-      domainAgeDays,
-      registrar,
-    };
   } catch (err: unknown) {
     const isTimeout =
       err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError');
+    const isDns = err instanceof Error && ('code' in err) && (err.code === 'ENOTFOUND' || err.code === 'EAI_AGAIN');
+    const failureCategory = isTimeout ? 'TIMEOUT' : isDns ? 'DNS_FAILURE' : 'NETWORK_FAILURE';
+    console.error(`RDAP diagnostic classification [${failureCategory}] for endpoint host ${endpointHostname}:`, err instanceof Error ? err.message : 'Unknown');
+
     return {
       status: isTimeout ? 'timeout' : 'error',
       message: isTimeout
-        ? 'RDAP lookup timed out after 4 seconds.'
-        : 'Unable to connect to RDAP service.',
+        ? 'RDAP request timed out after 4 seconds.'
+        : 'Unable to connect to RDAP service due to network or DNS failure.',
     };
   }
+
+  const httpStatus = response.status;
+  const contentType = response.headers.get('content-type') || 'unknown';
+
+  if (httpStatus === 404 || httpStatus === 501) {
+    console.error(`RDAP diagnostic classification [UNSUPPORTED_TLD]: endpoint host ${endpointHostname}, HTTP ${httpStatus}`);
+    return {
+      status: 'unsupported',
+      message: 'RDAP information is not supported or not available for this TLD.',
+    };
+  }
+
+  if (!response.ok) {
+    console.error(`RDAP diagnostic classification [HTTP_ERROR]: endpoint host ${endpointHostname}, HTTP ${httpStatus}, Content-Type: ${contentType}`);
+    return {
+      status: 'error',
+      message: `RDAP service returned HTTP error ${httpStatus}.`,
+    };
+  }
+
+  // Response size guard: check Content-Length if present (> 512KB rejected)
+  const contentLength = response.headers.get('content-length');
+  if (contentLength && parseInt(contentLength, 10) > 524288) {
+    console.error(`RDAP diagnostic classification [SIZE_LIMIT_EXCEEDED]: endpoint host ${endpointHostname}, Content-Length: ${contentLength}`);
+    return {
+      status: 'error',
+      message: 'RDAP response exceeded safety size limit.',
+    };
+  }
+
+  let json: unknown;
+  try {
+    json = await response.json();
+  } catch (err: unknown) {
+    console.error(`RDAP diagnostic classification [MALFORMED_JSON]: endpoint host ${endpointHostname}, Content-Type: ${contentType}`, err instanceof Error ? err.message : '');
+    return {
+      status: 'error',
+      message: 'Invalid RDAP JSON payload received.',
+    };
+  }
+
+  if (!json || typeof json !== 'object') {
+    console.error(`RDAP diagnostic classification [MALFORMED_JSON]: endpoint host ${endpointHostname}, Content-Type: ${contentType} (non-object JSON)`);
+    return {
+      status: 'error',
+      message: 'Invalid RDAP JSON payload received.',
+    };
+  }
+
+  // Extract registration and expiration events
+  const events = Array.isArray((json as { events?: Array<{ eventAction?: string; eventDate?: string }> }).events) ? (json as { events?: Array<{ eventAction?: string; eventDate?: string }> }).events! : [];
+  const regEvent = events.find((e) => e.eventAction === 'registration');
+  const expEvent = events.find((e) => e.eventAction === 'expiration');
+
+  const registrationDate: string | undefined = regEvent?.eventDate;
+  const expirationDate: string | undefined = expEvent?.eventDate;
+
+  // Extract registrar entity
+  let registrar: string | undefined;
+  const entities = Array.isArray((json as { entities?: Array<{ roles?: string[]; vcardArray?: unknown[]; handle?: string }> }).entities) ? (json as { entities?: Array<{ roles?: string[]; vcardArray?: unknown[]; handle?: string }> }).entities! : [];
+  const registrarEntity = entities.find((ent) =>
+    Array.isArray(ent.roles) && ent.roles.includes('registrar')
+  );
+
+  if (registrarEntity) {
+    if (registrarEntity.vcardArray && Array.isArray(registrarEntity.vcardArray[1])) {
+      const fnCard = (registrarEntity.vcardArray[1] as unknown[]).find((card: unknown) => Array.isArray(card) && card[0] === 'fn');
+      if (fnCard && Array.isArray(fnCard) && typeof fnCard[3] === 'string') {
+        registrar = fnCard[3];
+      }
+    }
+    if (!registrar && typeof registrarEntity.handle === 'string') {
+      registrar = registrarEntity.handle;
+    }
+  }
+
+  let domainAgeDays: number | undefined;
+  if (registrationDate) {
+    const regTime = new Date(registrationDate).getTime();
+    if (!isNaN(regTime)) {
+      domainAgeDays = Math.max(0, Math.floor((Date.now() - regTime) / (1000 * 60 * 60 * 24)));
+    }
+  }
+
+  if (!registrationDate) {
+    console.error(`RDAP diagnostic classification [REDACTED]: endpoint host ${endpointHostname}, Content-Type: ${contentType} (registration date not disclosed by registry)`);
+    return {
+      status: 'redacted',
+      registrar,
+      expirationDate,
+      message: 'Registration date is not published by registry or is redacted for privacy.',
+    };
+  }
+
+  return {
+    status: 'available',
+    registrationDate,
+    expirationDate,
+    domainAgeDays,
+    registrar,
+  };
 }
 
 /**

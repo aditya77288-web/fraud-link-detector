@@ -394,5 +394,43 @@ test('performRdapLookup: distinguishes timeout state', async () => {
   assert.equal(result.status, 'timeout');
 });
 
+test('performRdapLookup: distinguishes HTTP_ERROR on 500', async () => {
+  const mockFetch: typeof fetch = async () => {
+    return new Response('Server Error', { status: 500, headers: { 'Content-Type': 'text/plain' } });
+  };
+  const result = await performRdapLookup('example.com', mockFetch);
+  assert.equal(result.status, 'error');
+  assert.ok(result.message?.includes('HTTP error 500'));
+});
+
+test('performRdapLookup: distinguishes MALFORMED_JSON on invalid json', async () => {
+  const mockFetch: typeof fetch = async () => {
+    return new Response('Not JSON', { status: 200, headers: { 'Content-Type': 'application/json' } });
+  };
+  const result = await performRdapLookup('example.com', mockFetch);
+  assert.equal(result.status, 'error');
+  assert.ok(result.message?.includes('Invalid RDAP JSON'));
+});
+
+test('querySafeBrowsing: classifies KEY_RESTRICTIONS, API_NOT_ENABLED, and QUOTA_EXCEEDED correctly co-safeguarding secrets', async () => {
+  const testCases = [
+    { status: 403, body: { error: { code: 403, status: 'PERMISSION_DENIED', message: 'API key restricted by HTTP referrers' } } },
+    { status: 403, body: { error: { code: 403, status: 'SERVICE_DISABLED', message: 'Safe Browsing API is not enabled' } } },
+    { status: 429, body: { error: { code: 429, status: 'RESOURCE_EXHAUSTED', message: 'Quota exceeded for quota metric' } } },
+  ];
+
+  for (const tc of testCases) {
+    const mockFetch: typeof fetch = async () => {
+      return new Response(JSON.stringify(tc.body), { status: tc.status, headers: { 'Content-Type': 'application/json' } });
+    };
+    const result = await querySafeBrowsing('https://secret-target.com/path', 'secret-api-key-12345', mockFetch);
+    assert.equal(result.status, 502);
+    assert.equal(result.body.error, 'Threat intelligence service is temporarily unavailable.');
+    assert.ok(!JSON.stringify(result.body).includes('secret-api-key-12345'));
+    assert.ok(!JSON.stringify(result.body).includes('secret-target.com'));
+  }
+});
+
+
 
 

@@ -200,13 +200,15 @@ export async function querySafeBrowsing(
           errorDetail = ` (${errorStatus || errorCode}: ${errorMessage})`;
 
           const lowerMsg = errorMessage.toLowerCase();
-          if (errorCode === 403 || lowerMsg.includes('api key') || lowerMsg.includes('api_key_invalid')) {
+          if (errorCode === 403 && (lowerMsg.includes('restricted') || lowerMsg.includes('restriction') || errorStatus === 'PERMISSION_DENIED')) {
+            errorCategory = 'KEY_RESTRICTIONS';
+          } else if (errorCode === 403 || lowerMsg.includes('api key') || lowerMsg.includes('api_key_invalid')) {
             errorCategory = 'API_KEY_INVALID';
-          } else if (lowerMsg.includes('not enabled') || lowerMsg.includes('service_disabled')) {
+          } else if (lowerMsg.includes('not enabled') || lowerMsg.includes('service_disabled') || errorStatus === 'SERVICE_DISABLED') {
             errorCategory = 'API_NOT_ENABLED';
           } else if (errorCode === 400 || errorStatus === 'INVALID_ARGUMENT' || lowerMsg.includes('invalid argument')) {
             errorCategory = 'INVALID_ARGUMENT';
-          } else if (errorCode === 429 || lowerMsg.includes('quota') || lowerMsg.includes('resource_exhausted')) {
+          } else if (errorCode === 429 || lowerMsg.includes('quota') || lowerMsg.includes('resource_exhausted') || errorStatus === 'RESOURCE_EXHAUSTED') {
             errorCategory = 'QUOTA_EXCEEDED';
           }
         }
@@ -214,7 +216,7 @@ export async function querySafeBrowsing(
         // Fallback if error body is not JSON
       }
 
-      // Log structured diagnostics safely - NEVER log API key or user URL
+      // Log structured diagnostics safely - NEVER log API key, submitted URL, or complete request URL
       console.error(`Google Safe Browsing diagnostic classification [${errorCategory}]: HTTP ${response.status}${errorDetail}`);
 
       return {
@@ -256,7 +258,8 @@ export async function querySafeBrowsing(
   } catch (err: unknown) {
     const isTimeout =
       err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError');
-    console.error('Threat check request failed:', isTimeout ? 'Request timed out' : 'Network error');
+    const errorCategory = isTimeout ? 'TIMEOUT' : 'NETWORK_ERROR';
+    console.error(`Google Safe Browsing diagnostic classification [${errorCategory}]:`, err instanceof Error ? err.message : 'Unknown error');
 
     return {
       status: isTimeout ? 504 : 502,
@@ -265,7 +268,7 @@ export async function querySafeBrowsing(
         checked: false,
         error: isTimeout
           ? 'Threat intelligence request timed out.'
-          : 'Unable to reach threat intelligence service.',
+          : 'Threat intelligence service is temporarily unavailable.',
       },
     };
   }
