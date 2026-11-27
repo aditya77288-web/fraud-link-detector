@@ -9,7 +9,7 @@ Use Node.js 22 LTS and npm 10 or later.
 ```bash
 git clone https://github.com/aditya77288-web/fraud-link-detector.git
 cd fraud-link-detector
-npm install
+npm ci
 ```
 
 Copy the environment template:

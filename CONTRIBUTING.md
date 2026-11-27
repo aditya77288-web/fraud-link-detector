@@ -16,7 +16,7 @@ Thank you for considering a contribution to Fraud Link Detector.
    ```bash
    git clone https://github.com/aditya77288-web/fraud-link-detector.git
    cd fraud-link-detector
-   npm install
+   npm ci
    ```
 
 3. Copy `.env.example` to `.env` (`cp .env.example .env` on macOS/Linux or `Copy-Item .env.example .env` in Windows PowerShell) and configure only the optional services you intend to test.

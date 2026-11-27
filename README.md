@@ -492,11 +492,9 @@ git clone https://github.com/aditya77288-web/fraud-link-detector.git
 cd fraud-link-detector
 ```
 
-This repository currently has no committed npm lockfile. `npm install` resolves compatible versions from `package.json`, so installs are not fully reproducible. A committed and CI-validated lockfile should be added before treating builds as dependency-pinned.
-
 ### 2. Install Dependencies
 ```bash
-npm install
+npm ci
 ```
 
 ### 3. Configure Environment Variables (Optional)
