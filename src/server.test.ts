@@ -202,7 +202,7 @@ test('querySafeBrowsing: Mocked upstream 500 error returns generic temporary una
     assert.ok(typeof url === 'string');
     assert.ok(url.includes('/v5/urls:search'));
     assert.ok(url.includes('urls[]='));
-    return new Response(JSON.stringify({ error: { code: 400, message: 'Invalid argument: raw upstream error detail' } }), { status: 400 });
+    return new Response(JSON.stringify({ error: { code: 400, message: 'Invalid argument: raw upstream error detail' } }), { status: 400, headers: { 'Content-Type': 'application/json' } });
   };
 
   const result = await querySafeBrowsing('https://example.com', 'test-fake-key', mockFetch);

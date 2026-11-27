@@ -183,20 +183,39 @@ export async function querySafeBrowsing(
     });
 
     if (!response.ok) {
+      let errorCategory = 'UPSTREAM_ERROR';
       let errorDetail = '';
+      let errorCode = response.status;
+      let errorStatus = '';
+      let errorMessage = '';
+
       try {
         const errorJson = (await response.json()) as {
           error?: { code?: number; message?: string; status?: string };
         };
-        if (errorJson?.error?.message) {
-          errorDetail = ` (${errorJson.error.status || errorJson.error.code || response.status}: ${errorJson.error.message})`;
+        if (errorJson?.error) {
+          errorCode = errorJson.error.code || response.status;
+          errorStatus = errorJson.error.status || '';
+          errorMessage = errorJson.error.message || '';
+          errorDetail = ` (${errorStatus || errorCode}: ${errorMessage})`;
+
+          const lowerMsg = errorMessage.toLowerCase();
+          if (errorCode === 403 || lowerMsg.includes('api key') || lowerMsg.includes('api_key_invalid')) {
+            errorCategory = 'API_KEY_INVALID';
+          } else if (lowerMsg.includes('not enabled') || lowerMsg.includes('service_disabled')) {
+            errorCategory = 'API_NOT_ENABLED';
+          } else if (errorCode === 400 || errorStatus === 'INVALID_ARGUMENT' || lowerMsg.includes('invalid argument')) {
+            errorCategory = 'INVALID_ARGUMENT';
+          } else if (errorCode === 429 || lowerMsg.includes('quota') || lowerMsg.includes('resource_exhausted')) {
+            errorCategory = 'QUOTA_EXCEEDED';
+          }
         }
       } catch {
         // Fallback if error body is not JSON
       }
 
-      // Log status code and safe error detail only, NEVER the endpoint, query string, API key, or user URL
-      console.error(`Google Safe Browsing upstream error status: ${response.status}${errorDetail}`);
+      // Log structured diagnostics safely - NEVER log API key or user URL
+      console.error(`Google Safe Browsing diagnostic classification [${errorCategory}]: HTTP ${response.status}${errorDetail}`);
 
       return {
         status: 502,

@@ -599,7 +599,7 @@ export function ScanResultsSection({
                 {/* State: Checking */}
                 {threatState.status === 'checking' && (
                   <div className="flex items-center gap-3 py-1 text-xs text-slate-400">
-                    <p>Querying Google Safe Browsing v4 threatMatches database via server proxy...</p>
+                    <p>Querying Google Safe Browsing v5 database via server proxy...</p>
                   </div>
                 )}
 

@@ -97,7 +97,7 @@ export function SafetyNotice() {
                 </span>
               </div>
               <p className="text-xs text-slate-300 leading-relaxed">
-                If an administrator has configured a server-side <code className="text-indigo-300 font-mono">GOOGLE_SAFE_BROWSING_API_KEY</code>, the backend queries the Google Safe Browsing v4 API to identify known malware and deceptive threat records. If unconfigured, this external lookup is skipped entirely, operating in offline structural heuristic mode.
+                If an administrator has configured a server-side <code className="text-indigo-300 font-mono">GOOGLE_SAFE_BROWSING_API_KEY</code>, the backend queries the Google Safe Browsing v5 API to identify known malware and deceptive threat records. If unconfigured, this external lookup is skipped entirely, operating in offline structural heuristic mode.
               </p>
             </div>
           </div>
