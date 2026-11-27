@@ -196,17 +196,22 @@ test('querySafeBrowsing: Mocked upstream v5 clean result returns isThreat false'
   assert.equal(result.body.cacheDuration, '3600s');
 });
 
-test('querySafeBrowsing: Mocked upstream 500 error returns safe 502 without leaking key', async () => {
-  const mockFetch: typeof fetch = async () => {
-    return new Response('Internal Server Error', { status: 500 });
+test('querySafeBrowsing: Mocked upstream 500 error returns generic temporary unavailability error without leaking key or raw upstream message', async () => {
+  const mockFetch: typeof fetch = async (url, options) => {
+    assert.equal(options?.method, 'GET');
+    assert.ok(typeof url === 'string');
+    assert.ok(url.includes('/v5/urls:search'));
+    assert.ok(url.includes('urls[]='));
+    return new Response(JSON.stringify({ error: { code: 400, message: 'Invalid argument: raw upstream error detail' } }), { status: 400 });
   };
 
   const result = await querySafeBrowsing('https://example.com', 'test-fake-key', mockFetch);
   assert.equal(result.status, 502);
   assert.equal(result.body.configured, true);
   assert.equal(result.body.checked, false);
-  assert.ok(result.body.error);
+  assert.equal(result.body.error, 'Threat intelligence service is temporarily unavailable.');
   assert.ok(!JSON.stringify(result.body).includes('test-fake-key'));
+  assert.ok(!JSON.stringify(result.body).includes('raw upstream error detail'));
 });
 
 test('querySafeBrowsing: Mocked timeout error returns safe 504 without crashing', async () => {

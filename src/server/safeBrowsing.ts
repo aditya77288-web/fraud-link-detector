@@ -183,14 +183,27 @@ export async function querySafeBrowsing(
     });
 
     if (!response.ok) {
-      // Log status only, NEVER the endpoint or query string with API key
-      console.error('Google Safe Browsing upstream error status:', response.status);
+      let errorDetail = '';
+      try {
+        const errorJson = (await response.json()) as {
+          error?: { code?: number; message?: string; status?: string };
+        };
+        if (errorJson?.error?.message) {
+          errorDetail = ` (${errorJson.error.status || errorJson.error.code || response.status}: ${errorJson.error.message})`;
+        }
+      } catch {
+        // Fallback if error body is not JSON
+      }
+
+      // Log status code and safe error detail only, NEVER the endpoint, query string, API key, or user URL
+      console.error(`Google Safe Browsing upstream error status: ${response.status}${errorDetail}`);
+
       return {
         status: 502,
         body: {
           configured: true,
           checked: false,
-          error: 'Threat intelligence upstream service error.',
+          error: 'Threat intelligence service is temporarily unavailable.',
         },
       };
     }
