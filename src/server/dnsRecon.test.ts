@@ -265,3 +265,43 @@ test('SSRF Protection: Detects mixed public and private IP resolution (DNS rebin
   assert.ok(result.findings.some((f) => f.title.includes('DNS Rebinding Risk')));
 });
 
+// 17. Comprehensive RDAP Status Contract Tests (available, redacted, unsupported, timeout, error)
+test('RDAP Status Contract: Distinguishes available, redacted, unsupported, timeout, and error', async () => {
+  // 1. available
+  const availableFetch: typeof fetch = async () => new Response(JSON.stringify({
+    events: [{ eventAction: 'registration', eventDate: '2015-06-15T00:00:00Z' }]
+  }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  const r1 = await performRdapLookup('test.com', availableFetch);
+  assert.equal(r1.status, 'available');
+  assert.ok(r1.registrationDate);
+
+  // 2. redacted (successful parse, but no registration date)
+  const redactedFetch: typeof fetch = async () => new Response(JSON.stringify({
+    events: []
+  }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  const r2 = await performRdapLookup('test.com', redactedFetch);
+  assert.equal(r2.status, 'redacted');
+  assert.ok(r2.message?.includes('not published by registry') || r2.message?.includes('privacy'));
+
+  // 3. unsupported (404/501)
+  const unsupportedFetch: typeof fetch = async () => new Response('Not Found', { status: 404 });
+  const r3 = await performRdapLookup('test.cc', unsupportedFetch);
+  assert.equal(r3.status, 'unsupported');
+
+  // 4. timeout
+  const timeoutFetch: typeof fetch = async () => {
+    const err = new Error('Timeout');
+    err.name = 'TimeoutError';
+    throw err;
+  };
+  const r4 = await performRdapLookup('test.com', timeoutFetch);
+  assert.equal(r4.status, 'timeout');
+
+  // 5. error (HTTP 500)
+  const errorFetch: typeof fetch = async () => new Response('Error', { status: 500 });
+  const r5 = await performRdapLookup('test.com', errorFetch);
+  assert.equal(r5.status, 'error');
+  assert.ok(!r5.message?.includes('privacy')); // ensure error is never classified as privacy redaction
+});
+
+
