@@ -31,6 +31,7 @@ A full-stack cybersecurity portfolio project for investigating suspicious links,
 - [Visual Walkthrough](#visual-walkthrough)
 - [Quick Demo Guide](#quick-demo-guide)
 - [Installation & Getting Started](#installation--getting-started)
+- [Vercel Serverless Deployment](#vercel-serverless-deployment)
 - [Environment Configuration](#environment-configuration)
 - [Testing & Verification](#testing--verification)
 - [Application Limitations & Constraints](#application-limitations--constraints)
@@ -140,7 +141,7 @@ To ensure complete technical transparency, features are categorized into impleme
 - [x] **PWA Web Share Target (Android & Desktop)**: Receives shared suspicious links or message text from chat apps (WhatsApp, Telegram, SMS) with explicit candidate confirmation before analysis.
 - [x] **Isolated Cloud Website Screenshot**: Ephemeral cloud-rendered visual preview via external isolated sandbox (Microlink API) with local SSRF pre-flight blocking, 8-second global timeout, 2MB incremental stream ceiling, raster magic-bytes validation, and CDN privacy disclosure.
 - [x] **Privacy Labels & Layered Disclosures**: Header accurately presents `"Local URL Analysis"` and `"Privacy-Focused Processing"` badges, complemented by a dedicated Privacy Architecture card detailing all 5 processing layers.
-- [x] **Automated Test Suite**: 129 automated unit and integration tests covering parser logic, risk engine rules, warning engine classifications, SSRF bypasses, API contracts, clipboard parsing, share targets, and screenshot rendering.
+- [x] **Automated Test Suite**: 147 automated unit and integration tests across 12 test suites covering parser logic, risk engine rules, warning engine classifications, SSRF bypasses, API contracts, clipboard parsing, share targets, screenshot rendering, and Vercel serverless API routing.
 
 ### 2. Partially Implemented Features
 
@@ -531,8 +532,33 @@ npm run start
 - `npm run build`: Compiles production frontend bundle to `dist/` (`vite build`).
 - `npm run start`: Runs the production server with pre-built static assets. `cross-env` makes the `NODE_ENV=production` setting work consistently on Windows, macOS, and Linux.
 - `npm run lint`: Performs TypeScript type checking (`tsc --noEmit`).
-- `npm test`: Runs the 129 currently defined automated unit and integration test cases (`tsx --test ...`).
+- `npm test`: Runs all 147 automated unit and integration test cases across 12 test specifications (`tsx --test ...`).
 - `npm run clean`: Removes generated `dist/` and `server.js` outputs using a cross-platform Node.js script.
+
+---
+
+## Vercel Serverless Deployment
+
+Fraud Link Detector is fully compatible with Vercel's Node.js Serverless architecture while preserving standalone Express execution for local development and traditional container environments.
+
+### Deployment Architecture on Vercel
+1. **Frontend Static Assets**: Vercel compiles the React SPA via `npm run build` (`vite build`) and deploys the optimized output directory (`dist/`) directly to Vercel's global Edge Network.
+2. **Serverless API Functions**: The Express application is exported from `api/[...route].ts` (catch-all serverless function capturing all `/api/*` endpoints with natural pathname preservation) and `api/index.ts` (handling the `/api` root and discovery endpoint), powered by the modular factory in `src/server/app.ts`. Express does not invoke `app.listen()` when executed in a serverless environment.
+3. **Unified Routing (`vercel.json`)**:
+   - Catch-all serverless routing naturally matches `/api/*` without destructive path rewrites.
+   - Non-API routes match `/((?!api(?:/|$)).*)` and fall back to `/index.html` for client-side SPA handling.
+   - Express mounts routes strictly once at `/api` and receives the true endpoint pathname.
+
+### Configuring Environment Variables in Vercel
+In your Vercel project dashboard, navigate to **Settings > Environment Variables** to configure optional keys:
+
+| Variable | Description | Recommended Scope |
+|:---|:---|:---|
+| `GOOGLE_SAFE_BROWSING_API_KEY` | *(Optional)* Google Safe Browsing Lookup API v4 key for malware/phishing queries. | Production, Preview, Development |
+| `SCREENSHOT_API_KEY` | *(Optional)* Microlink API key for website screenshots. | Production, Preview, Development |
+| `TRUST_PROXY` | Set to `1` or `true` so Express recognizes Vercel's reverse proxy and extracts real client IPs for rate limiting. | Production, Preview, Development |
+
+> **Security Note**: Environment variables in Vercel are kept strictly server-side in the Node.js Serverless runtime. They are never prefixed with `VITE_` and are never bundled into client-side JavaScript.
 
 ---
 
@@ -568,7 +594,7 @@ npm run build
 ```
 
 ### Verified Test Suite Summary
-The repository currently defines **129 test cases** across **11 dedicated test specifications**. The CI workflow runs the complete suite on each push and pull request; use the CI status badge above as the current pass/fail source:
+The repository currently defines **147 test cases** across **12 dedicated test specifications**. The CI workflow runs the complete suite on each push and pull request; use the CI status badge above as the current pass/fail source:
 - `src/utils/urlParser.test.ts` (6 tests): RFC 3986 normalization, default ports, authority credential handling, Punycode parsing.
 - `src/utils/riskEngine.test.ts` (8 tests): Deterministic scoring rules, threshold clamping, edge-case heuristic triggers.
 - `src/utils/historyStorage.test.ts` (4 tests): Local storage persistence, LRU bounds, token and credential redaction.
@@ -579,7 +605,8 @@ The repository currently defines **129 test cases** across **11 dedicated test s
 - `src/utils/clipboardUrl.test.ts` (12 tests): Safe user-triggered clipboard reading, permissions rejection handling, and embedded link extraction.
 - `src/utils/shareTarget.test.ts` (9 tests): Android Web Share Target parameter parsing, candidate extraction, and query string cleanup.
 - `src/server/screenshotService.test.ts` (11 tests): Remote visual preview, local pre-flight SSRF blocks, secondary URL validation, incremental streaming limits, and binary magic bytes validation.
-- `src/utils/warningEngine.test.ts` (20 tests): Scam Awareness Warning Engine categories, contextual path-keyword classification, port 8080 wording, and regression verification for IP hosts with path keywords.
+- `src/utils/warningEngine.test.ts` (23 tests): Scam Awareness Warning Engine categories, contextual path-keyword classification, port 8080 wording, and regression verification for IP hosts with path keywords.
+- `src/server/vercelApi.test.ts` (18 tests): Vercel Serverless Function entrypoint exports without `listen()`, `vercel.json` routing configuration, `/api` root discovery, natural path routing across all 5 endpoints (`/api/health`, `/api/threat-check`, `/api/recon`, `/api/redirect-chain`, `/api/screenshot`), path normalization, defensive subpath recovery, security headers, rate limiting, and 400 error responses for malformed inputs.
 
 ---
 

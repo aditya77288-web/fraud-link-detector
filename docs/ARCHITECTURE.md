@@ -44,7 +44,9 @@ flowchart TD
 
 ## Main source locations
 
-- `server.ts`: Express app, API routes, middleware, and frontend serving.
+- `api/index.ts` and `api/[...route].ts`: Vercel Serverless Function entrypoints exporting the Express API handler.
+- `server.ts`: Standalone server entrypoint for local development and traditional container environments (`npm run dev`, `npm start`).
+- `src/server/app.ts`: Modular Express app factory, API routes, security headers, rate limiters, and error handling (no `app.listen()` call).
 - `src/server/safeBrowsing.ts`: URL validation, rate limiting, and Safe Browsing client.
 - `src/server/dnsRecon.ts`: DNS and RDAP reconnaissance.
 - `src/server/redirectInspector.ts`: bounded redirect inspection and connection controls.
