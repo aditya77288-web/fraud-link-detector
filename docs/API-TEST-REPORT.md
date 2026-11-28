@@ -41,7 +41,7 @@ To eliminate flakiness, dependency on external networks, rate limit quotas, or t
 - `screenshotResolver` & `screenshotFetch`: Controls pre-flight IP resolution and upstream screenshot provider fetches.
 - `disableRateLimiting`: Disables test runner IP throttling on high-throughput sequential assertions while preserving production rate limiter configurations.
 
-In `apiIntegration.test.ts`, the delegating mock handlers throw immediately if an unmocked external network call is attempted, ensuring tests are 100% hermetic and never leak outbound requests to live third-party services. Production runtime paths fall back to live system implementations (`dns.promises`, global `fetch`, socket-level TLS agents) whenever custom options are not supplied.
+In `apiIntegration.test.ts`, every injected external dependency is fail-fast by default: Safe Browsing, RDAP/recon fetch, DNS resolution for recon and redirects, redirect HTTP requests, screenshot DNS resolution, and screenshot-provider fetches throw immediately unless a test explicitly installs a mock. Tests that need a simulated public destination opt in through a named public-DNS fixture. This prevents accidental use of permissive success defaults and ensures the suite never makes live third-party network calls. Production runtime paths retain their normal system implementations when test options are not supplied.
 
 ---
 
