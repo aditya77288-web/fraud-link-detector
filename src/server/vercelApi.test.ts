@@ -42,7 +42,7 @@ test('Vercel Config: vercel.json contains valid Vite build settings and non-dest
 
   const content = JSON.parse(fs.readFileSync(vercelJsonPath, 'utf8'));
   assert.equal(content.framework, 'vite');
-  assert.equal(content.buildCommand, 'npm run build');
+  assert.equal(content.buildCommand, 'npm run lint && npm run build');
   assert.equal(content.outputDirectory, 'dist');
   assert.ok(Array.isArray(content.rewrites), 'rewrites must be an array');
 

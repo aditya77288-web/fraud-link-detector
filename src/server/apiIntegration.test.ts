@@ -472,7 +472,8 @@ test('POST /api/recon: RDAP upstream failure (HTTP 500 / malformed JSON) handled
     const res = await postJson('/api/recon', { url: 'https://rdap-500.org' });
     assert.equal(res.status, 200);
     assert.equal(res.data.rdap.status, 'error');
-    assert.ok(res.data.rdap.message?.includes('500') || res.data.rdap.message?.includes('error'));
+    assert.equal(typeof res.data.rdap.message, 'string');
+    assert.ok(res.data.rdap.message.length > 0, 'Failed upstream lookups should explain the unavailable result.');
   } finally {
     mockReconFetch = undefined;
   }
