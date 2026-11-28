@@ -10,6 +10,7 @@ import { ScreenshotResult } from '../types/screenshot.js';
 
 export const SCREENSHOT_TIMEOUT_MS = 8000;
 export const MAX_IMAGE_BUFFER_BYTES = 2 * 1024 * 1024; // 2 MB ceiling
+export const MAX_PROVIDER_JSON_BYTES = 64 * 1024; // Provider metadata should remain small
 
 export interface FetchFunction {
   (input: string | URL | Request, init?: RequestInit): Promise<Response>;
@@ -33,7 +34,7 @@ async function isPublicScreenshotHost(
   hostname: string,
   resolver: ScreenshotHostResolver
 ): Promise<boolean> {
-  const normalized = hostname.toLowerCase().replace(/^\\[|\\]$/g, '');
+  const normalized = hostname.toLowerCase().replace(/^\[|\]$/g, '');
   if (isSpecialUseHostname(normalized)) return false;
 
   if (isIP(normalized)) {
@@ -128,6 +129,7 @@ export async function readLimitedBuffer(
 ): Promise<Buffer> {
   const contentLength = response.headers.get('content-length');
   if (contentLength && Number(contentLength) > maxBytes) {
+    try { await response.body?.cancel('Content-Length exceeded limit'); } catch {}
     throw new Error(`Response exceeds maximum size limit of ${maxBytes} bytes.`);
   }
 
@@ -277,7 +279,17 @@ export async function captureWebsiteScreenshot(
 
     // A. If provider returned JSON with image CDN URL
     if (contentType.includes('application/json')) {
-      const json = await response.json();
+      let json: { data?: { screenshot?: { url?: unknown } } };
+      try {
+        const providerBody = await readLimitedBuffer(response, MAX_PROVIDER_JSON_BYTES);
+        json = JSON.parse(providerBody.toString('utf8')) as typeof json;
+      } catch {
+        clearTimeout(timeoutId);
+        return {
+          status: 502,
+          body: { status: 'error', error: 'Screenshot provider returned an invalid or oversized JSON response.' },
+        };
+      }
       const imageUrl = json?.data?.screenshot?.url;
 
       if (!imageUrl || typeof imageUrl !== 'string') {

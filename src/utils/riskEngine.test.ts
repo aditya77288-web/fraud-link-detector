@@ -162,3 +162,9 @@ test('Validation: Invalid URLs receive clear validation message, not misleading 
   assert.equal(assessment.indicators.length, 0);
   assert.ok(assessment.summaryMessage.includes('Invalid URL format') || assessment.summaryMessage.includes('not a valid'));
 });
+
+
+test('Hostname heuristics do not treat keywords in the registered domain as subdomain lures', () => {
+  const assessment = assessUrlRisk(parseUrl('https://login.com/about'));
+  assert.equal(assessment.indicators.some((indicator) => indicator.ruleNumber === 7), false);
+});

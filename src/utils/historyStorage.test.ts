@@ -21,7 +21,7 @@ test('redactSensitiveUrl redacts authority credentials password', () => {
 
   assert.ok(!redacted.includes('superSecretPass'), 'Should not leak authority password');
   assert.ok(redacted.includes('[REDACTED]') || redacted.includes('%5BREDACTED%5D'));
-  assert.ok(redacted.includes('admin:'));
+  assert.ok(!redacted.includes('admin'), 'Authority usernames can also contain private credentials');
 });
 
 test('redactSensitiveUrl leaves clean URLs without sensitive parameters unchanged', () => {
@@ -37,4 +37,13 @@ test('redactSensitiveUrl redacts long JWT or hex token strings', () => {
 
   assert.ok(!result.includes('doNotLeakThisSignature'));
   assert.ok(result.includes('[REDACTED]') || result.includes('%5BREDACTED%5D'));
+});
+
+
+test('redactSensitiveUrl removes token-like path segments and values after sensitive routes', () => {
+  const url = 'https://example.com/reset/eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.signature?next=/home';
+  const redacted = redactSensitiveUrl(url);
+  assert.ok(!redacted.includes('eyJhbGciOiJIUzI1NiJ9'));
+  assert.ok(!redacted.includes('signature'));
+  assert.ok(redacted.includes('[REDACTED]') || redacted.includes('%5BREDACTED%5D'));
 });

@@ -269,3 +269,20 @@ test('captureWebsiteScreenshot SSRF: Rejects provider image redirects instead of
   assert.equal(result.status, 502);
   assert.equal(imageFetchOptions?.redirect, 'error');
 });
+
+
+test('captureWebsiteScreenshot: Rejects oversized JSON metadata from the screenshot provider', async () => {
+  const oversizedMetadata = JSON.stringify({ data: { screenshot: { url: 'https://cdn.microlink.io/image.jpg' } }, padding: 'x'.repeat(70 * 1024) });
+  const oversizedProvider: typeof fetch = async () => new Response(oversizedMetadata, { status: 200, headers: { 'Content-Type': 'application/json' } });
+  const result = await captureWebsiteScreenshot('https://example.com', undefined, oversizedProvider, publicTestResolver);
+  assert.equal(result.status, 502);
+  assert.match(result.body.error || '', /oversized JSON/i);
+});
+
+test('captureWebsiteScreenshot: Supports a public IPv6 literal target', async () => {
+  const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10]);
+  const mockFetch: typeof fetch = async () => new Response(jpeg, { status: 200, headers: { 'Content-Type': 'image/jpeg' } });
+  const result = await captureWebsiteScreenshot('https://[2001:4860:4860::8888]/', undefined, mockFetch, async () => { throw new Error('Literal IPv6 addresses should not require DNS'); });
+  assert.equal(result.status, 200);
+  assert.equal(result.body.status, 'success');
+});

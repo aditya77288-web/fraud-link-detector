@@ -184,15 +184,18 @@ export function assessUrlRisk(parsed: ParsedUrlDetails | null): RiskAssessment {
   // Rule 7: Commonly abused words in URL paths or subdomains (+20 pts)
   const lowerHostname = parsed.hostname.toLowerCase();
   const lowerPathname = parsed.pathname.toLowerCase();
-  const matchedKeywords = SENSITIVE_KEYWORDS.filter((word) => {
-    // Check in subdomains (avoiding top-level domain match) or in path segments
-    const inSubdomain = !parsed.isIpAddress && lowerHostname.includes(word);
-    const inPath = lowerPathname.includes(word);
-    return inSubdomain || inPath;
-  });
+  const hostnameLabels = lowerHostname.split('.');
+  const subdomainLabels = parsed.isIpAddress ? [] : hostnameLabels.slice(0, Math.max(0, hostnameLabels.length - 2));
+  const matchedHostKeywords = SENSITIVE_KEYWORDS.filter((word) =>
+    subdomainLabels.some((label) => label.split(/[^a-z0-9]+/).includes(word))
+  );
+  const matchedPathKeywords = SENSITIVE_KEYWORDS.filter((word) => lowerPathname.includes(word));
+  const matchedKeywords = SENSITIVE_KEYWORDS.filter(
+    (word) => matchedHostKeywords.includes(word) || matchedPathKeywords.includes(word)
+  );
 
   if (matchedKeywords.length > 0) {
-    const isPathOnly = !lowerHostname.includes(matchedKeywords[0]) && lowerPathname.includes(matchedKeywords[0]);
+    const isPathOnly = matchedHostKeywords.length === 0 && matchedPathKeywords.length > 0;
     indicators.push({
       id: 'rule-abused-words',
       ruleNumber: 7,

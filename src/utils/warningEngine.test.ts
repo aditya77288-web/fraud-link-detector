@@ -543,3 +543,9 @@ test('Warning Engine Regression: Stronger independently detected phishing eviden
   assert.ok(authWarnDeep.evidence.some((e) => e.includes('Sensitive authentication/brand terms embedded in hostname')));
 });
 
+
+
+test('Warning Engine: Registered domain keywords alone do not create a phishing warning', () => {
+  const report = generateScamAwarenessReport({ parsedUrl: parseUrl('https://login.com/about') });
+  assert.equal(report.warnings.some((warning) => warning.category === 'phishing_credential_theft'), false);
+});

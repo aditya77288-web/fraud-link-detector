@@ -562,6 +562,8 @@ In your Vercel project dashboard, navigate to **Settings > Environment Variables
 | `UPSTASH_REDIS_REST_URL` | Recommended for shared rate limiting across serverless instances. Use the HTTPS REST URL from your Upstash Redis database. | Production, Preview, Development |
 | `UPSTASH_REDIS_REST_TOKEN` | Secret token for the shared Upstash Redis rate limiter. | Production, Preview, Development |
 
+The production Vercel project also applies an edge firewall limit of 180 `/api` requests per client IP per minute before requests reach serverless functions. Express keeps its per-process limits as a second layer; configure both Upstash variables for shared application-level limits on other multi-instance deployments.
+
 > **Security Note**: Environment variables in Vercel are kept strictly server-side in the Node.js Serverless runtime. They are never prefixed with `VITE_` and are never bundled into client-side JavaScript.
 
 ---

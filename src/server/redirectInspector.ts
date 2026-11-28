@@ -333,6 +333,7 @@ export async function inspectRedirectChain(
   let statusMessage = 'Redirect chain inspected successfully.';
   let currentRawUrl = cleanedInitial;
   let hopIndex = 0;
+  let totalRedirects = 0;
 
   while (hopIndex <= maxHops) {
     // Check overall timeout
@@ -408,7 +409,7 @@ export async function inspectRedirectChain(
 
       try {
         hopRes = await requestWithDeadline('HEAD');
-        if (hopRes.statusCode === 405) {
+        if ([403, 405, 501].includes(hopRes.statusCode)) {
           hopRes = await requestWithDeadline('GET');
         }
       } catch (err: unknown) {
@@ -443,6 +444,7 @@ export async function inspectRedirectChain(
     const isRedirect = [301, 302, 303, 307, 308].includes(hopRes.statusCode);
     const rawLocation = hopRes.headers['location'];
     const locationStr = Array.isArray(rawLocation) ? rawLocation[0] : rawLocation;
+    if (isRedirect && locationStr) totalRedirects += 1;
     const serverHeader = Array.isArray(hopRes.headers['server'])
       ? hopRes.headers['server'][0]
       : hopRes.headers['server'] || null;
@@ -560,8 +562,6 @@ export async function inspectRedirectChain(
 
   const lastHop = hops[hops.length - 1];
   const finalDestination = lastHop ? lastHop.url : sanitizedInitial;
-  const totalRedirects = Math.max(0, hops.length - 1);
-
   return {
     initialUrl: sanitizedInitial,
     finalDestination,

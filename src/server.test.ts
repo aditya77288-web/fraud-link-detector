@@ -486,3 +486,20 @@ test('querySafeBrowsing: handles non-JSON upstream error responses (HTML/text) s
 
 
 
+
+
+test('API unknown routes return JSON 404 instead of frontend HTML', async () => {
+  const response = await fetch(`${SERVER_BASE}/api/not-a-real-endpoint`);
+  assert.equal(response.status, 404);
+  assert.match(response.headers.get('content-type') || '', /application\/json/);
+  assert.deepEqual(await response.json(), { error: 'API endpoint not found.' });
+});
+
+test('API oversized JSON bodies return 413', async () => {
+  const response = await fetch(`${SERVER_BASE}/api/threat-check`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url: 'https://example.com/', extra: 'x'.repeat(110 * 1024) }),
+  });
+  assert.equal(response.status, 413);
+  assert.deepEqual(await response.json(), { error: 'Request body exceeds the 100 KB limit.' });
+});

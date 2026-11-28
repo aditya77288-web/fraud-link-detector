@@ -96,6 +96,7 @@ export function validateThreatCheckUrl(rawInput: unknown): UrlValidationResult {
  * counters across instances; otherwise fall back to a bounded local counter.
  */
 export function createRateLimiter(maxRequests = 60, windowMs = 60000) {
+  const maxClientRecords = 10000;
   const clients = new Map<string, { count: number; resetTime: number }>();
   const redisUrlValue = process.env.UPSTASH_REDIS_REST_URL;
   const redisToken = process.env.UPSTASH_REDIS_REST_TOKEN;
@@ -168,11 +169,15 @@ export function createRateLimiter(maxRequests = 60, windowMs = 60000) {
     const now = Date.now();
     const clientRecord = clients.get(clientIp);
     if (!clientRecord || now > clientRecord.resetTime) {
-      if (clients.size >= 10000) {
+      if (clients.size >= maxClientRecords) {
         for (const [ip, record] of clients.entries()) {
           if (now > record.resetTime || record.count < maxRequests) clients.delete(ip);
-          if (clients.size < 9000) break;
+          if (clients.size < maxClientRecords) break;
         }
+      }
+      if (clients.size >= maxClientRecords) {
+        res.status(503).json({ error: 'Rate limiter is at capacity. Please retry shortly.' });
+        return;
       }
       clients.set(clientIp, { count: 1, resetTime: now + windowMs });
       next();

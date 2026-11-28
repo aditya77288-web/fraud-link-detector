@@ -14,6 +14,10 @@ export interface ScanHistoryItem {
 
 const STORAGE_KEY = 'fraud_link_detector_history_v1';
 const MAX_HISTORY_ITEMS = 10;
+const SENSITIVE_PATH_MARKERS = new Set([
+  'auth', 'code', 'confirm', 'invite', 'magic', 'magic-link', 'password-reset',
+  'recover', 'recovery', 'reset', 'session', 'token', 'verify', 'verification',
+]);
 
 // Sensitive query parameter keys that must be redacted before saving to localStorage
 const SENSITIVE_PARAM_KEYS = new Set([
@@ -60,12 +64,30 @@ export function redactSensitiveUrl(urlStr: string): string {
   try {
     const parsed = new URL(urlStr);
 
-    // 1. Redact authority password if present (e.g., http://user:password@host -> http://user:[REDACTED]@host)
-    if (parsed.password) {
+    // 1. Remove all authority userinfo because usernames can also contain secrets.
+    if (parsed.username || parsed.password) {
+      parsed.username = '[REDACTED]';
       parsed.password = '[REDACTED]';
     }
 
-    // 2. Redact sensitive query parameters
+    // 2. Redact token-like path segments and values following common secret-bearing routes.
+    const pathSegments = parsed.pathname.split('/');
+    for (let index = 1; index < pathSegments.length; index += 1) {
+      let decodedSegment = pathSegments[index];
+      try { decodedSegment = decodeURIComponent(decodedSegment); } catch {}
+      let previousSegment = pathSegments[index - 1].toLowerCase();
+      try { previousSegment = decodeURIComponent(previousSegment).toLowerCase(); } catch {}
+      const looksLikeToken =
+        decodedSegment.length >= 24 && /^[a-zA-Z0-9_-]+$/.test(decodedSegment) &&
+        /[a-zA-Z]/.test(decodedSegment) && /[0-9]/.test(decodedSegment);
+      const isJwt = /^[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+$/.test(decodedSegment);
+      if (SENSITIVE_PATH_MARKERS.has(previousSegment) || looksLikeToken || isJwt) {
+        pathSegments[index] = '[REDACTED]';
+      }
+    }
+    parsed.pathname = pathSegments.join('/');
+
+    // 3. Redact sensitive query parameters
     let hasModifiedParams = false;
     const newParams = new URLSearchParams();
 

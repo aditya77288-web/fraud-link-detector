@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Header } from './components/Header';
 import { UrlInputSection } from './components/UrlInputSection';
 import { ScanResultsSection } from './components/ScanResultsSection';
@@ -28,6 +28,9 @@ export default function App() {
   const [reconState, setReconState] = useState<ReconClientState>({ status: 'idle', data: null });
   const [redirectState, setRedirectState] = useState<RedirectClientState>({ status: 'idle', data: null });
   const [incomingCandidate, setIncomingCandidate] = useState<DetectedCandidate | null>(null);
+  const scanIdRef = useRef(0);
+  const scanTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scanAbortRef = useRef<AbortController | null>(null);
 
   // Load existing scan history from localStorage and inspect Web Share Target params on initial render
   useEffect(() => {
@@ -59,9 +62,16 @@ export default function App() {
     const trimmed = urlToScan.trim();
     if (!trimmed) return;
 
+    const scanId = ++scanIdRef.current;
+    if (scanTimerRef.current) clearTimeout(scanTimerRef.current);
+    scanAbortRef.current?.abort();
+    const controller = new AbortController();
+    scanAbortRef.current = controller;
     setIsScanning(true);
     // Instant smooth client-side parsing without external calls
-    setTimeout(() => {
+    scanTimerRef.current = setTimeout(() => {
+      scanTimerRef.current = null;
+      if (scanId !== scanIdRef.current) return;
       const details = parseUrl(trimmed);
       setScannedResult(details);
 
@@ -76,9 +86,11 @@ export default function App() {
         fetch('/api/threat-check', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
+          signal: controller.signal,
           body: JSON.stringify({ url: details.normalizedUrl }),
         })
           .then(async (res) => {
+            if (scanId !== scanIdRef.current) return;
             if (!res.ok) {
               setThreatState({
                 status: 'unavailable',
@@ -88,6 +100,7 @@ export default function App() {
             }
 
             const data = await res.json();
+            if (scanId !== scanIdRef.current) return;
             if (!data.configured) {
               setThreatState({
                 status: 'unconfigured',
@@ -109,6 +122,7 @@ export default function App() {
             }
           })
           .catch(() => {
+            if (scanId !== scanIdRef.current) return;
             setThreatState({
               status: 'unavailable',
               message: 'Threat intelligence service is temporarily unavailable. Local heuristic analysis remains active.',
@@ -120,9 +134,11 @@ export default function App() {
         fetch('/api/recon', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
+          signal: controller.signal,
           body: JSON.stringify({ url: details.normalizedUrl }),
         })
           .then(async (res) => {
+            if (scanId !== scanIdRef.current) return;
             if (!res.ok) {
               setReconState({
                 status: 'error',
@@ -133,12 +149,14 @@ export default function App() {
             }
 
             const reconData = await res.json();
+            if (scanId !== scanIdRef.current) return;
             setReconState({
               status: 'completed',
               data: reconData,
             });
           })
           .catch(() => {
+            if (scanId !== scanIdRef.current) return;
             setReconState({
               status: 'error',
               data: null,
@@ -151,9 +169,11 @@ export default function App() {
         fetch('/api/redirect-chain', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
+          signal: controller.signal,
           body: JSON.stringify({ url: details.normalizedUrl }),
         })
           .then(async (res) => {
+            if (scanId !== scanIdRef.current) return;
             if (!res.ok) {
               setRedirectState({
                 status: 'unavailable',
@@ -164,12 +184,14 @@ export default function App() {
             }
 
             const chainData = await res.json();
+            if (scanId !== scanIdRef.current) return;
             setRedirectState({
               status: 'completed',
               data: chainData,
             });
           })
           .catch(() => {
+            if (scanId !== scanIdRef.current) return;
             setRedirectState({
               status: 'unavailable',
               data: null,
@@ -182,7 +204,7 @@ export default function App() {
         setRedirectState({ status: 'idle', data: null });
       }
 
-      setIsScanning(false);
+      if (scanId === scanIdRef.current) setIsScanning(false);
     }, 150);
   };
 
@@ -195,6 +217,11 @@ export default function App() {
   };
 
   const handleClear = () => {
+    scanIdRef.current += 1;
+    if (scanTimerRef.current) clearTimeout(scanTimerRef.current);
+    scanTimerRef.current = null;
+    scanAbortRef.current?.abort();
+    scanAbortRef.current = null;
     setInputUrl('');
     setScannedResult(null);
     setThreatState({ status: 'idle' });

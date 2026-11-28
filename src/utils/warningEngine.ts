@@ -115,9 +115,11 @@ export function generateScamAwarenessReport({
   const lowerHost = parsedUrl.hostname.toLowerCase();
   const lowerPath = parsedUrl.pathname.toLowerCase();
 
-  const matchedHostKeywords = !parsedUrl.isIpAddress
-    ? SENSITIVE_KEYWORDS.filter((kw) => lowerHost.includes(kw))
-    : [];
+  const hostLabels = lowerHost.split('.');
+  const subdomainLabels = parsedUrl.isIpAddress ? [] : hostLabels.slice(0, Math.max(0, hostLabels.length - 2));
+  const matchedHostKeywords = SENSITIVE_KEYWORDS.filter((kw) =>
+    subdomainLabels.some((label) => label.split(/[^a-z0-9]+/).includes(kw))
+  );
   const matchedPathKeywords = SENSITIVE_KEYWORDS.filter((kw) => lowerPath.includes(kw));
 
   // Determine if path keywords are the contextual indicator (no host brand lures, no authority credentials, no confirmed threat).

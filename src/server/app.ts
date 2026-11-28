@@ -239,6 +239,10 @@ export function createApp(options?: ApiRouterOptions): express.Express {
   // Mount API router strictly once at '/api'
   const apiRouter = createApiRouter(options);
   app.use('/api', apiRouter);
+  app.use('/api', (_req: Request, res: Response) => {
+    res.setHeader('Cache-Control', 'no-store');
+    res.status(404).json({ error: 'API endpoint not found.' });
+  });
 
   // Centralized safe error handler (prevents leaking internal stack traces or secrets)
   app.use(
@@ -249,6 +253,11 @@ export function createApp(options?: ApiRouterOptions): express.Express {
       _next: NextFunction
     ) => {
       res.setHeader('Cache-Control', 'no-store');
+      if (err.status === 413 || err.type === 'entity.too.large') {
+        res.status(413).json({ error: 'Request body exceeds the 100 KB limit.' });
+        return;
+      }
+
       if (
         err.status === 400 ||
         err.type === 'entity.parse.failed' ||
