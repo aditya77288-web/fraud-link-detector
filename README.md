@@ -47,8 +47,8 @@ A full-stack cybersecurity portfolio project for investigating suspicious links,
 | Primary purpose | Investigate suspicious URLs without opening them in the user's browser |
 | Local analysis | Deterministic URL parsing, heuristic scoring, and plain-English warnings |
 | Server-side analysis | Optional Safe Browsing lookup, DNS/RDAP reconnaissance, redirect inspection, and screenshot preview |
-| Defensive focus | URL validation, SSRF controls, connection-level IP pinning for outbound inspection, bounded RDAP response streams, timeouts, rate limits, and sensitive-value redaction |
-| Verification | Latest reported checkpoint: 181 tests passing, TypeScript checks, lint, and production build; GitHub Actions badge shows current CI status |
+| Defensive focus | URL validation, SSRF controls, DNS pinning for redirect requests, timeouts, rate limits, and sensitive-value redaction |
+| Verification | Automated Node.js tests, TypeScript type-checking, and production build in GitHub Actions |
 | License | MIT |
 
 **Project status:** Active development. This is an investigative aid, not a replacement for endpoint protection, a browser security product, or a professional security assessment. The project has not received an independent third-party security audit.
@@ -133,7 +133,7 @@ To ensure complete technical transparency, features are categorized into impleme
 - [x] **DNS Reconnaissance**: Concurrent lookups of `A`, `AAAA`, and `MX` records with individual 3-second timeouts via `node:dns/promises`.
 - [x] **Domain Age & RDAP Analysis**: Automated query to ICANN bootstrap RDAP services to resolve domain registration age, registrar name, and creation timestamps. Flags domains registered $\le 30$ days ago.
 - [x] **SSRF-Protected Redirect Chain Inspector**: Hop-by-hop redirect analysis (maximum 5 hops) using `HEAD` requests (with zero-body `GET` fallback).
-- [x] **DNS Rebinding & Connection Pinning**: RDAP outbound HTTPS connections use a custom Node.js DNS lookup to pin the socket to a pre-validated public IP; the connected socket's remote address is checked against that IP, while TLS hostname verification remains enabled.
+- [x] **DNS Rebinding & Connection Pinning**: Sockets explicitly pinned to pre-validated IP addresses via a custom HTTP/HTTPS agent lookup handler to eliminate Time-of-Check to Time-of-Use (TOCTOU) exploits.
 - [x] **Protocol Downgrade Detection**: Flags redirects transitioning from `https://` to insecure `http://`.
 - [x] **Sensitive Parameter Redaction**: Strips passwords, auth tokens, session IDs, and JWTs from local history storage and inspected hop locations.
 - [x] **In-Memory Rate Limiting**: Sliding-window protection (60 requests per minute for recon/redirects, 15 requests per minute for screenshots).
@@ -141,7 +141,7 @@ To ensure complete technical transparency, features are categorized into impleme
 - [x] **PWA Web Share Target (Android & Desktop)**: Receives shared suspicious links or message text from chat apps (WhatsApp, Telegram, SMS) with explicit candidate confirmation before analysis.
 - [x] **Isolated Cloud Website Screenshot**: Ephemeral cloud-rendered visual preview via external isolated sandbox (Microlink API) with local SSRF pre-flight blocking, 8-second global timeout, 2MB incremental stream ceiling, raster magic-bytes validation, and CDN privacy disclosure.
 - [x] **Privacy Labels & Layered Disclosures**: Header accurately presents `"Local URL Analysis"` and `"Privacy-Focused Processing"` badges, complemented by a dedicated Privacy Architecture card detailing all 5 processing layers.
-- [x] **Automated Test Suite**: 181 automated unit and integration tests reported passing across 12 test suites, covering parser logic, risk engine rules, warning engine classifications, SSRF protections, RDAP response handling and DNS pinning, API contracts, clipboard parsing, share targets, screenshot rendering, and Vercel serverless API routing.
+- [x] **Automated Test Suite**: 223 automated unit and integration tests across 13 test suites covering parser logic, risk engine rules, warning engine classifications, SSRF bypasses, API contracts, clipboard parsing, share targets, screenshot rendering, Vercel serverless API routing, and hermetic backend API integration testing.
 
 ### 2. Partially Implemented Features
 
@@ -188,15 +188,6 @@ const customLookup: CustomLookupFunction = (hostname, options, callback) => {
 ```
 
 The underlying TCP socket connects directly to the pre-screened IP address while preserving the original `Host` header for virtual hosting compliance.
-
-### RDAP DNS Pinning & Bounded Response Reading
-
-RDAP bootstrap and registry requests use a separate outbound-request path with destination validation before connection:
-- The IANA RDAP DNS bootstrap response is limited to **1 MiB**; individual RDAP registry responses are limited to **512 KiB**.
-- `Content-Length` is checked when present, but the response stream is also counted by actual byte length so missing or misleading headers do not bypass the cap.
-- The stream reader is cancelled when the byte limit is exceeded; oversized bodies are not fully buffered before the limit is applied.
-- Each RDAP destination, including each redirect destination, is resolved and checked against restricted address ranges. The validated address is supplied through a custom Node.js HTTPS lookup, and the connected socket's remote address is checked against the pinned address.
-- RDAP redirects are handled manually and revalidated before the next connection. HTTPS and normal TLS certificate/hostname verification are retained.
 
 ### Stream Disposal & Resource Limiting
 
@@ -541,7 +532,7 @@ npm run start
 - `npm run build`: Compiles production frontend bundle to `dist/` (`vite build`).
 - `npm run start`: Runs the production server with pre-built static assets. `cross-env` makes the `NODE_ENV=production` setting work consistently on Windows, macOS, and Linux.
 - `npm run lint`: Performs TypeScript type checking (`tsc --noEmit`).
-- `npm test`: Runs the automated unit and integration test suite across 12 test specifications (`tsx --test ...`).
+- `npm test`: Runs all 223 automated unit and integration test cases across 13 test specifications (`tsx --test ...`).
 - `npm run clean`: Removes generated `dist/` and `server.js` outputs using a cross-platform Node.js script.
 
 ---
@@ -603,19 +594,20 @@ npm run build
 ```
 
 ### Verified Test Suite Summary
-The latest project checkpoint reports **181 passing test cases** across **12 dedicated test specifications**, with TypeScript type-checking, lint, and production build also passing. These are the latest reported local verification results; the CI status badge above remains the source of truth for the current GitHub Actions run:
+The repository currently defines **223 test cases** across **13 dedicated test specifications**. The CI workflow runs the complete suite on each push and pull request; use the CI status badge above as the current pass/fail source:
 - `src/utils/urlParser.test.ts` (6 tests): RFC 3986 normalization, default ports, authority credential handling, Punycode parsing.
 - `src/utils/riskEngine.test.ts` (8 tests): Deterministic scoring rules, threshold clamping, edge-case heuristic triggers.
 - `src/utils/historyStorage.test.ts` (4 tests): Local storage persistence, LRU bounds, token and credential redaction.
-- `src/server.test.ts` (20 tests): Express rate limiter, CORS policies, health check, and threat check route handling.
+- `src/server.test.ts` (30 tests): Express rate limiter, CORS policies, health check, threat check route handling, Safe Browsing unit queries, and RDAP lookup parsing.
 - `src/utils/threatStates.test.ts` (5 tests): Exact messaging contracts for Clean, Threat, Unconfigured, and Unavailable states.
-- `src/server/dnsRecon.test.ts`: Asynchronous DNS lookups, RDAP bootstrap queries, timeouts, restricted-address checks, streamed response-size limits, cancellation, and pinned-lookup behaviour.
-- `src/server/redirectInspector.test.ts` (15 tests): Multi-hop redirect limits, protocol downgrade alerts, SSRF defenses, loopback blocks, and connection pinning.
-- `src/utils/clipboardUrl.test.ts` (12 tests): Safe user-triggered clipboard reading, permissions rejection handling, and embedded link extraction.
+- `src/server/dnsRecon.test.ts` (39 tests): Asynchronous DNS lookups, RDAP bootstrap queries, timeouts, byte stream limits, and private IP isolation.
+- `src/server/redirectInspector.test.ts` (16 tests): Multi-hop redirect limits, protocol downgrade alerts, SSRF defenses, loopback blocks, and connection pinning.
+- `src/utils/clipboardUrl.test.ts` (13 tests): Safe user-triggered clipboard reading, permissions rejection handling, and embedded link extraction.
 - `src/utils/shareTarget.test.ts` (9 tests): Android Web Share Target parameter parsing, candidate extraction, and query string cleanup.
-- `src/server/screenshotService.test.ts` (11 tests): Remote visual preview, local pre-flight SSRF blocks, secondary URL validation, incremental streaming limits, and binary magic bytes validation.
-- `src/utils/warningEngine.test.ts` (23 tests): Scam Awareness Warning Engine categories, contextual path-keyword classification, port 8080 wording, and regression verification for IP hosts with path keywords.
+- `src/server/screenshotService.test.ts` (13 tests): Remote visual preview, local pre-flight SSRF blocks, secondary URL validation, incremental streaming limits, and binary magic bytes validation.
+- `src/utils/warningEngine.test.ts` (20 tests): Scam Awareness Warning Engine categories, contextual path-keyword classification, port 8080 wording, and regression verification for IP hosts with path keywords.
 - `src/server/vercelApi.test.ts` (18 tests): Vercel Serverless Function entrypoint exports without `listen()`, `vercel.json` routing configuration, `/api` root discovery, natural path routing across all 5 endpoints (`/api/health`, `/api/threat-check`, `/api/recon`, `/api/redirect-chain`, `/api/screenshot`), path normalization, defensive subpath recovery, security headers, rate limiting, and 400 error responses for malformed inputs.
+- `src/server/apiIntegration.test.ts` (42 tests): Complete hermetic HTTP integration tests for all 4 primary endpoints (`/api/threat-check`, `/api/recon`, `/api/redirect-chain`, `/api/screenshot`) covering clean and threat URLs, invalid schemes, malformed JSON, missing fields, SSRF loopback/private/metadata blocks, DNS rebinding defenses, external service failures, and upstream timeout scenarios.
 
 ---
 

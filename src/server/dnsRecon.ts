@@ -91,8 +91,9 @@ export function isSpecialUseIpv6(ip: string): boolean {
  */
 export function isSpecialUseHostname(hostname: string): boolean {
   const lower = hostname.toLowerCase().trim();
+  const unbracketed = lower.replace(/^\[|\]$/g, '');
 
-  if (lower === 'localhost') return true;
+  if (lower === 'localhost' || unbracketed === 'localhost') return true;
   if (
     lower.endsWith('.localhost') ||
     lower.endsWith('.local') ||
@@ -104,9 +105,9 @@ export function isSpecialUseHostname(hostname: string): boolean {
     return true;
   }
 
-  // Direct IP checks
-  if (isSpecialUseIpv4(lower)) return true;
-  if (isSpecialUseIpv6(lower)) return true;
+  // Direct IP checks (supports unbracketed and bracketed notation)
+  if (isSpecialUseIpv4(unbracketed)) return true;
+  if (isSpecialUseIpv6(unbracketed)) return true;
 
   return false;
 }

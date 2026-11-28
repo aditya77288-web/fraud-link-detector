@@ -155,7 +155,7 @@ The project uses request validation, timeouts, rate limiting, redirect-hop limit
 
 ## 6. Verification and Testing
 
-The latest project checkpoint recorded **181 passing automated tests across 12 test specifications**, along with successful TypeScript checking, linting, and production build. These are project-reported verification results; the current CI workflow status should be checked in GitHub Actions before relying on them as a fresh run.
+The latest project checkpoint recorded **223 passing automated tests across 13 test specifications**, along with successful TypeScript checking, linting, and production build. These are project-reported verification results; the current CI workflow status should be checked in GitHub Actions before relying on them as a fresh run.
 
 The test suite covers areas including:
 - URL parsing, normalization, and heuristic scoring

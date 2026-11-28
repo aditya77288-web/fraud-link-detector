@@ -4,18 +4,37 @@ import {
   createRateLimiter,
   querySafeBrowsing,
 } from './safeBrowsing.js';
-import { performFullRecon } from './dnsRecon.js';
-import { inspectRedirectChain } from './redirectInspector.js';
-import { captureWebsiteScreenshot } from './screenshotService.js';
+import { performFullRecon, DnsResolverInterface } from './dnsRecon.js';
+import { inspectRedirectChain, HttpRequester } from './redirectInspector.js';
+import {
+  captureWebsiteScreenshot,
+  FetchFunction,
+  ScreenshotHostResolver,
+} from './screenshotService.js';
 
-export function createApiRouter(): express.Router {
+export interface ApiRouterOptions {
+  safeBrowsingFetch?: typeof fetch;
+  reconResolver?: DnsResolverInterface;
+  reconFetch?: typeof fetch;
+  redirectResolver?: DnsResolverInterface;
+  redirectRequester?: HttpRequester;
+  screenshotFetch?: FetchFunction;
+  screenshotResolver?: ScreenshotHostResolver;
+  disableRateLimiting?: boolean;
+}
+
+export function createApiRouter(options?: ApiRouterOptions): express.Router {
   const router = express.Router();
 
   // Rate limiter for reconnaissance and threat checks: max 60 requests per minute per IP
-  const threatCheckRateLimiter = createRateLimiter(60, 60000);
+  const threatCheckRateLimiter = options?.disableRateLimiting
+    ? ((_req: Request, _res: Response, next: NextFunction) => next())
+    : createRateLimiter(60, 60000);
 
   // Dedicated rate limiter for visual previews: max 15 requests per minute per IP
-  const screenshotRateLimiter = createRateLimiter(15, 60000);
+  const screenshotRateLimiter = options?.disableRateLimiting
+    ? ((_req: Request, _res: Response, next: NextFunction) => next())
+    : createRateLimiter(15, 60000);
 
   // Unconditional no-store cache control for all API endpoints
   router.use((_req: Request, res: Response, next: NextFunction) => {
@@ -66,7 +85,11 @@ export function createApiRouter(): express.Router {
         // Read API key exclusively from server-side environment variable
         const apiKey = process.env.GOOGLE_SAFE_BROWSING_API_KEY;
 
-        const result = await querySafeBrowsing(validation.sanitizedUrl, apiKey);
+        const result = await querySafeBrowsing(
+          validation.sanitizedUrl,
+          apiKey,
+          options?.safeBrowsingFetch
+        );
         res.status(result.status).json(result.body);
       } catch (err) {
         next(err);
@@ -90,7 +113,11 @@ export function createApiRouter(): express.Router {
         }
 
         const parsed = new URL(validation.sanitizedUrl);
-        const reconResult = await performFullRecon(parsed.hostname);
+        const reconResult = await performFullRecon(
+          parsed.hostname,
+          options?.reconResolver,
+          options?.reconFetch
+        );
         res.status(200).json(reconResult);
       } catch (err) {
         next(err);
@@ -113,7 +140,10 @@ export function createApiRouter(): express.Router {
           return;
         }
 
-        const chainResult = await inspectRedirectChain(validation.sanitizedUrl);
+        const chainResult = await inspectRedirectChain(validation.sanitizedUrl, {
+          dnsResolver: options?.redirectResolver,
+          httpRequester: options?.redirectRequester,
+        });
         res.status(200).json(chainResult);
       } catch (err) {
         next(err);
@@ -129,7 +159,12 @@ export function createApiRouter(): express.Router {
       res.setHeader('Cache-Control', 'no-store');
       try {
         const apiKey = process.env.SCREENSHOT_API_KEY;
-        const result = await captureWebsiteScreenshot(req.body?.url, apiKey);
+        const result = await captureWebsiteScreenshot(
+          req.body?.url,
+          apiKey,
+          options?.screenshotFetch,
+          options?.screenshotResolver
+        );
         res.status(result.status).json(result.body);
       } catch (err) {
         next(err);
@@ -140,7 +175,7 @@ export function createApiRouter(): express.Router {
   return router;
 }
 
-export function createApp(): express.Express {
+export function createApp(options?: ApiRouterOptions): express.Express {
   const app = express();
 
   // Configure reverse proxy trust: configurable via TRUST_PROXY env var
@@ -202,17 +237,35 @@ export function createApp(): express.Express {
   });
 
   // Mount API router strictly once at '/api'
-  const apiRouter = createApiRouter();
+  const apiRouter = createApiRouter(options);
   app.use('/api', apiRouter);
 
   // Centralized safe error handler (prevents leaking internal stack traces or secrets)
-  app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
-    console.error('Unhandled server error:', err.message);
-    res.setHeader('Cache-Control', 'no-store');
-    res.status(500).json({
-      error: 'Internal Server Error',
-    });
-  });
+  app.use(
+    (
+      err: Error & { status?: number; type?: string },
+      _req: Request,
+      res: Response,
+      _next: NextFunction
+    ) => {
+      res.setHeader('Cache-Control', 'no-store');
+      if (
+        err.status === 400 ||
+        err.type === 'entity.parse.failed' ||
+        err instanceof SyntaxError
+      ) {
+        res.status(400).json({
+          error: 'Malformed JSON payload.',
+        });
+        return;
+      }
+
+      console.error('Unhandled server error:', err.message);
+      res.status(500).json({
+        error: 'Internal Server Error',
+      });
+    }
+  );
 
   return app;
 }
