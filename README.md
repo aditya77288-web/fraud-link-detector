@@ -134,6 +134,8 @@ To ensure complete technical transparency, features are categorized into impleme
 - [x] **Domain Age & RDAP Analysis**: Automated query to ICANN bootstrap RDAP services to resolve domain registration age, registrar name, and creation timestamps. Flags domains registered $\le 30$ days ago.
 - [x] **SSRF-Protected Redirect Chain Inspector**: Hop-by-hop redirect analysis (maximum 5 hops) using `HEAD` requests (with zero-body `GET` fallback).
 - [x] **DNS Rebinding & Connection Pinning**: Sockets explicitly pinned to pre-validated IP addresses via a custom HTTP/HTTPS agent lookup handler to eliminate Time-of-Check to Time-of-Use (TOCTOU) exploits.
+- [x] **RDAP Bounded Response Handling**: IANA bootstrap responses are limited to 1 MiB and individual registry responses to 512 KiB; streaming readers enforce actual received-byte limits and cancel oversized streams.
+- [x] **RDAP Outbound Connection Validation**: RDAP destinations are resolved and checked before connection, the HTTPS request is pinned to the validated IP, the connected socket's remote address is verified, redirects are revalidated, and standard TLS hostname verification remains enabled.
 - [x] **Protocol Downgrade Detection**: Flags redirects transitioning from `https://` to insecure `http://`.
 - [x] **Sensitive Parameter Redaction**: Strips passwords, auth tokens, session IDs, and JWTs from local history storage and inspected hop locations.
 - [x] **In-Memory Rate Limiting**: Sliding-window protection (60 requests per minute for recon/redirects, 15 requests per minute for screenshots).
