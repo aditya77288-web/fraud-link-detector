@@ -421,17 +421,17 @@ test('Redirect Inspector: DNS resolution is bounded by the overall timeout', asy
 
 
 test('Redirect Inspector: Retries GET when HEAD is forbidden and counts observed redirects accurately', async () => {
-  const mockDns = createMockDns({ 'head-blocked.example': { v4: ['93.184.216.34'] }, 'destination.example': { v4: ['93.184.216.35'] } });
+  const mockDns = createMockDns({ 'head-blocked.example.com': { v4: ['93.184.216.34'] }, 'destination.example.com': { v4: ['93.184.216.35'] } });
   const seenMethods: string[] = [];
   const mockHttp: HttpRequester = async (url, _ip, method) => {
     seenMethods.push(method);
-    if (url.hostname === 'head-blocked.example' && method === 'HEAD') return { statusCode: 403, statusText: 'Forbidden', headers: {}, durationMs: 1 };
-    if (url.hostname === 'head-blocked.example') return { statusCode: 302, statusText: 'Found', headers: { location: 'https://destination.example/final' }, durationMs: 1 };
+    if (url.hostname === 'head-blocked.example.com' && method === 'HEAD') return { statusCode: 403, statusText: 'Forbidden', headers: {}, durationMs: 1 };
+    if (url.hostname === 'head-blocked.example.com') return { statusCode: 302, statusText: 'Found', headers: { location: 'https://destination.example.com/final' }, durationMs: 1 };
     return { statusCode: 200, statusText: 'OK', headers: {}, durationMs: 1 };
   };
-  const result = await inspectRedirectChain('https://head-blocked.example/start', { dnsResolver: mockDns, httpRequester: mockHttp });
+  const result = await inspectRedirectChain('https://head-blocked.example.com/start', { dnsResolver: mockDns, httpRequester: mockHttp });
   assert.deepEqual(seenMethods, ['HEAD', 'GET', 'HEAD']);
   assert.equal(result.status, 'COMPLETED');
   assert.equal(result.totalRedirects, 1);
-  assert.equal(result.finalDestination, 'https://destination.example/final');
+  assert.equal(result.finalDestination, 'https://destination.example.com/final');
 });
