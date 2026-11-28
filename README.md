@@ -559,8 +559,8 @@ In your Vercel project dashboard, navigate to **Settings > Environment Variables
 | `GOOGLE_SAFE_BROWSING_API_KEY` | *(Optional)* Google Safe Browsing Lookup API v5 key for malware/phishing queries. | Production, Preview, Development |
 | `SCREENSHOT_API_KEY` | *(Optional)* Microlink API key for website screenshots. | Production, Preview, Development |
 | `TRUST_PROXY` | Set to `1` so Express recognizes Vercel's single trusted proxy hop and extracts the client IP for rate limiting. Defaults to `false`. | Production, Preview, Development |
-| `UPSTASH_REDIS_REST_URL` | Required for production shared rate limiting across serverless instances. Use the HTTPS REST URL from your Upstash Redis database. | Production, Preview, Development |
-| `UPSTASH_REDIS_REST_TOKEN` | Required secret token for the shared Upstash Redis rate limiter. | Production, Preview, Development |
+| `UPSTASH_REDIS_REST_URL` | Recommended for shared rate limiting across serverless instances. Use the HTTPS REST URL from your Upstash Redis database. | Production, Preview, Development |
+| `UPSTASH_REDIS_REST_TOKEN` | Secret token for the shared Upstash Redis rate limiter. | Production, Preview, Development |
 
 > **Security Note**: Environment variables in Vercel are kept strictly server-side in the Node.js Serverless runtime. They are never prefixed with `VITE_` and are never bundled into client-side JavaScript.
 
@@ -575,8 +575,8 @@ Runtime configuration variables (the `.env.example` file contains the supported 
 | `PORT` | Optional | `3000` | HTTP port on which the Express server listens. |
 | `NODE_ENV` | Optional | `development` | Set to `production` when running the pre-compiled bundle from `dist/`. |
 | `TRUST_PROXY` | Optional | `false` | Controls Express reverse-proxy trust. Set to `1` only behind exactly one trusted proxy hop; use `false` when directly exposed. Incorrect settings can undermine IP-based rate limiting. |
-| `UPSTASH_REDIS_REST_URL` | Required in production | None | HTTPS REST endpoint for shared IP-based rate limits. Without both Upstash settings, production rate-limited endpoints return HTTP 503 rather than silently using per-instance counters. |
-| `UPSTASH_REDIS_REST_TOKEN` | Required in production | None | Secret bearer token for the shared Upstash Redis rate limiter. Store it only in the server environment. |
+| `UPSTASH_REDIS_REST_URL` | Optional | None | HTTPS REST endpoint for shared IP-based rate limits. Without Upstash settings, rate limits use per-process memory and may vary across serverless instances. |
+| `UPSTASH_REDIS_REST_TOKEN` | Optional | None | Secret bearer token for the shared Upstash Redis rate limiter. Store it only in the server environment. |
 | `GOOGLE_SAFE_BROWSING_API_KEY` | Optional | None | API key for Google Safe Browsing Lookup API v5 (`GET /v5/urls:search`). If omitted, `/api/threat-check` returns `configured: false`, and the application runs in offline structural heuristic mode. |
 | `SCREENSHOT_API_KEY` | Optional | None | API key for external screenshot rendering via Microlink API. If omitted, the server uses Microlink's public free-tier. |
 

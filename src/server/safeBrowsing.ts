@@ -92,9 +92,8 @@ export function validateThreatCheckUrl(rawInput: unknown): UrlValidationResult {
 }
 
 /**
- * Rate limit requests by client IP. Production requires a shared Upstash Redis
- * REST store so limits remain consistent across serverless instances. Development
- * uses a bounded in-memory fallback.
+ * Rate limit requests by client IP. Use Upstash Redis when configured for shared
+ * counters across instances; otherwise fall back to a bounded local counter.
  */
 export function createRateLimiter(maxRequests = 60, windowMs = 60000) {
   const clients = new Map<string, { count: number; resetTime: number }>();
@@ -112,7 +111,6 @@ export function createRateLimiter(maxRequests = 60, windowMs = 60000) {
   }
 
   const redisConfigIncomplete = Boolean(redisUrlValue || redisToken) && !redisUrl;
-  const productionWithoutRedis = process.env.NODE_ENV === 'production' && !redisUrl;
   const script = "local count=redis.call('INCR',KEYS[1]); if count==1 then redis.call('PEXPIRE',KEYS[1],ARGV[1]) end; return {count,redis.call('PTTL',KEYS[1])}";
 
   const cleanupTimer = setInterval(() => {
@@ -126,7 +124,7 @@ export function createRateLimiter(maxRequests = 60, windowMs = 60000) {
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     const clientIp = req.ip || req.socket.remoteAddress || 'unknown';
 
-    if (redisConfigIncomplete || productionWithoutRedis) {
+    if (redisConfigIncomplete) {
       res.status(503).json({
         error: 'Shared rate limiting is not configured. Set UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN.',
       });
@@ -136,7 +134,7 @@ export function createRateLimiter(maxRequests = 60, windowMs = 60000) {
     if (redisUrl && redisToken) {
       try {
         const ipDigest = createHash('sha256').update(clientIp).digest('hex');
-        const key = `fraud-link-detector:rate:${maxRequests}:${ipDigest}`;
+        const key = `fraud-link-detector:rate:${maxRequests}:${windowMs}:${ipDigest}`;
         const redisResponse = await fetch(`${redisUrl.origin}/`, {
           method: 'POST',
           headers: {
