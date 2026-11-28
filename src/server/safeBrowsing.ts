@@ -1,4 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
+import { createHash } from 'node:crypto';
 
 export interface ThreatCheckResult {
   configured: boolean;
@@ -91,59 +92,98 @@ export function validateThreatCheckUrl(rawInput: unknown): UrlValidationResult {
 }
 
 /**
- * Simple in-memory rate limiter to prevent abuse and quota exhaustion.
- * Default: 60 requests per minute per IP address.
+ * Rate limit requests by client IP. Production requires a shared Upstash Redis
+ * REST store so limits remain consistent across serverless instances. Development
+ * uses a bounded in-memory fallback.
  */
 export function createRateLimiter(maxRequests = 60, windowMs = 60000) {
   const clients = new Map<string, { count: number; resetTime: number }>();
+  const redisUrlValue = process.env.UPSTASH_REDIS_REST_URL;
+  const redisToken = process.env.UPSTASH_REDIS_REST_TOKEN;
+  let redisUrl: URL | undefined;
 
-  // Cleanup expired entries periodically
-  setInterval(() => {
+  try {
+    if (redisUrlValue && redisToken) {
+      redisUrl = new URL(redisUrlValue);
+      if (redisUrl.protocol !== 'https:') redisUrl = undefined;
+    }
+  } catch {
+    redisUrl = undefined;
+  }
+
+  const redisConfigIncomplete = Boolean(redisUrlValue || redisToken) && !redisUrl;
+  const productionWithoutRedis = process.env.NODE_ENV === 'production' && !redisUrl;
+  const script = "local count=redis.call('INCR',KEYS[1]); if count==1 then redis.call('PEXPIRE',KEYS[1],ARGV[1]) end; return {count,redis.call('PTTL',KEYS[1])}";
+
+  const cleanupTimer = setInterval(() => {
     const now = Date.now();
     for (const [ip, record] of clients.entries()) {
-      if (now > record.resetTime) {
-        clients.delete(ip);
+      if (now > record.resetTime) clients.delete(ip);
+    }
+  }, Math.max(windowMs, 30000));
+  cleanupTimer.unref();
+
+  return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    const clientIp = req.ip || req.socket.remoteAddress || 'unknown';
+
+    if (redisConfigIncomplete || productionWithoutRedis) {
+      res.status(503).json({
+        error: 'Shared rate limiting is not configured. Set UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN.',
+      });
+      return;
+    }
+
+    if (redisUrl && redisToken) {
+      try {
+        const ipDigest = createHash('sha256').update(clientIp).digest('hex');
+        const key = `fraud-link-detector:rate:${maxRequests}:${ipDigest}`;
+        const redisResponse = await fetch(`${redisUrl.origin}/`, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${redisToken}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(['EVAL', script, '1', key, String(windowMs)]),
+          signal: AbortSignal.timeout(2000),
+        });
+        if (!redisResponse.ok) throw new Error(`Redis returned HTTP ${redisResponse.status}`);
+        const payload = await redisResponse.json() as { result?: unknown };
+        const result = payload.result;
+        if (!Array.isArray(result) || typeof result[0] !== 'number' || typeof result[1] !== 'number') {
+          throw new Error('Redis returned an invalid rate-limit result');
+        }
+
+        const [count, ttl] = result;
+        if (count > maxRequests) {
+          res.setHeader('Retry-After', String(Math.max(1, Math.ceil(ttl / 1000))));
+          res.status(429).json({ error: 'Too many requests. Please try again later.' });
+          return;
+        }
+        next();
+        return;
+      } catch {
+        res.status(503).json({ error: 'Rate limiting is temporarily unavailable. Please try again later.' });
+        return;
       }
     }
-  }, Math.max(windowMs, 30000)).unref();
 
-  return (req: Request, res: Response, next: NextFunction): void => {
-    const clientIp = req.ip || req.socket.remoteAddress || 'unknown';
     const now = Date.now();
     const clientRecord = clients.get(clientIp);
-
     if (!clientRecord || now > clientRecord.resetTime) {
       if (clients.size >= 10000) {
-        // 1. Purge expired client records first
         for (const [ip, record] of clients.entries()) {
-          if (now > record.resetTime) {
-            clients.delete(ip);
-          }
-        }
-        // 2. If still at capacity, evict unblocked entries (count < maxRequests) to protect active rate-limit bans
-        if (clients.size >= 10000) {
-          for (const [ip, record] of clients.entries()) {
-            if (record.count < maxRequests) {
-              clients.delete(ip);
-              if (clients.size < 9000) break;
-            }
-          }
-        }
-        // 3. Strict bound fallback: evict oldest entry to prevent unbounded memory growth
-        while (clients.size >= 10000) {
-          const oldestKey = clients.keys().next().value;
-          if (!oldestKey) break;
-          clients.delete(oldestKey);
+          if (now > record.resetTime || record.count < maxRequests) clients.delete(ip);
+          if (clients.size < 9000) break;
         }
       }
       clients.set(clientIp, { count: 1, resetTime: now + windowMs });
-      return next();
+      next();
+      return;
     }
 
     if (clientRecord.count >= maxRequests) {
-      res.status(429).json({
-        error: 'Too many threat check requests. Please try again later.',
-      });
+      res.setHeader('Retry-After', String(Math.max(1, Math.ceil((clientRecord.resetTime - now) / 1000))));
+      res.status(429).json({ error: 'Too many requests. Please try again later.' });
       return;
     }
 

@@ -179,8 +179,8 @@ export function createApp(options?: ApiRouterOptions): express.Express {
   const app = express();
 
   // Configure reverse proxy trust: configurable via TRUST_PROXY env var
-  // Defaults to 1 (standard for Vercel, Cloud Run, or single reverse proxy)
-  const trustProxyEnv = process.env.TRUST_PROXY ?? '1';
+  // Never trust forwarded headers unless the deployment explicitly configures its proxy.
+  const trustProxyEnv = process.env.TRUST_PROXY ?? 'false';
   if (trustProxyEnv === 'false' || trustProxyEnv === '0') {
     app.set('trust proxy', false);
   } else if (trustProxyEnv === 'true') {
