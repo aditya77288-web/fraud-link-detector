@@ -25,27 +25,40 @@ const appOptions = {
     throw new Error(`Unexpected unmocked Safe Browsing fetch call to ${String(input)}`);
   },
   reconResolver: {
-    resolve4: async (h: string) => (mockReconResolver ? mockReconResolver.resolve4(h) : ['93.184.215.14']),
-    resolve6: async (h: string) => (mockReconResolver ? mockReconResolver.resolve6(h) : ['2606:2800:220:1:248:1893:25c8:1946']),
-    resolveMx: async (h: string) => (mockReconResolver ? mockReconResolver.resolveMx(h) : [{ exchange: 'mail.example.com', priority: 10 }]),
+    resolve4: async (h: string) => {
+      if (!mockReconResolver) throw new Error(`Unexpected unmocked Recon DNS resolve4 call for ${h}`);
+      return mockReconResolver.resolve4(h);
+    },
+    resolve6: async (h: string) => {
+      if (!mockReconResolver) throw new Error(`Unexpected unmocked Recon DNS resolve6 call for ${h}`);
+      return mockReconResolver.resolve6(h);
+    },
+    resolveMx: async (h: string) => {
+      if (!mockReconResolver) throw new Error(`Unexpected unmocked Recon DNS resolveMx call for ${h}`);
+      return mockReconResolver.resolveMx(h);
+    },
   },
   reconFetch: async (input: RequestInfo | URL, init?: RequestInit) => {
     if (mockReconFetch) return mockReconFetch(input, init);
     throw new Error(`Unexpected unmocked Recon fetch call to ${String(input)}`);
   },
   redirectResolver: {
-    resolve4: async (h: string) => (mockRedirectResolver ? mockRedirectResolver.resolve4(h) : ['93.184.215.14']),
-    resolve6: async (h: string) => (mockRedirectResolver ? mockRedirectResolver.resolve6(h) : []),
-    resolveMx: async (h: string) => (mockRedirectResolver ? mockRedirectResolver.resolveMx(h) : []),
+    resolve4: async (h: string) => {
+      if (!mockRedirectResolver) throw new Error(`Unexpected unmocked Redirect DNS resolve4 call for ${h}`);
+      return mockRedirectResolver.resolve4(h);
+    },
+    resolve6: async (h: string) => {
+      if (!mockRedirectResolver) throw new Error(`Unexpected unmocked Redirect DNS resolve6 call for ${h}`);
+      return mockRedirectResolver.resolve6(h);
+    },
+    resolveMx: async (h: string) => {
+      if (!mockRedirectResolver) throw new Error(`Unexpected unmocked Redirect DNS resolveMx call for ${h}`);
+      return mockRedirectResolver.resolveMx(h);
+    },
   },
   redirectRequester: async (targetUrl: URL, pinnedIp: string, method: 'HEAD' | 'GET', timeoutMs: number) => {
     if (mockRedirectRequester) return mockRedirectRequester(targetUrl, pinnedIp, method, timeoutMs);
-    return {
-      statusCode: 200,
-      statusText: 'OK',
-      headers: {},
-      durationMs: 25,
-    };
+    throw new Error(`Unexpected unmocked Redirect requester call to ${targetUrl.href}`);
   },
   screenshotFetch: async (input: string | URL | Request, init?: RequestInit) => {
     if (mockScreenshotFetch) return mockScreenshotFetch(input, init);
@@ -53,7 +66,7 @@ const appOptions = {
   },
   screenshotResolver: async (hostname: string) => {
     if (mockScreenshotResolver) return mockScreenshotResolver(hostname);
-    return ['93.184.215.14'];
+    throw new Error(`Unexpected unmocked Screenshot DNS resolution for ${hostname}`);
   },
   disableRateLimiting: true,
 };
@@ -76,6 +89,16 @@ after(() => {
     server.close();
   }
 });
+
+
+// Explicit public DNS fixture: tests that need outbound-path simulation must opt in.
+function publicDnsResolver(): DnsResolverInterface {
+  return {
+    resolve4: async () => ['93.184.215.14'],
+    resolve6: async () => [],
+    resolveMx: async () => [],
+  };
+}
 
 // Helper for standard JSON POST requests
 async function postJson(endpoint: string, body: unknown, headers: Record<string, string> = {}) {
@@ -566,6 +589,7 @@ test('POST /api/redirect-chain SSRF Protection: Blocks loopback and private IP i
 });
 
 test('POST /api/redirect-chain SSRF Protection: Blocks mid-chain redirect to loopback or private addresses', async () => {
+  mockRedirectResolver = publicDnsResolver();
   mockRedirectRequester = async () => ({
     statusCode: 302,
     statusText: 'Found',
@@ -579,11 +603,13 @@ test('POST /api/redirect-chain SSRF Protection: Blocks mid-chain redirect to loo
     assert.equal(res.data.status, 'BLOCKED_SPECIAL_USE_IP');
     assert.ok(res.data.findings.some((f: { id: string }) => f.id.includes('blocked-ip')));
   } finally {
+    mockRedirectResolver = undefined;
     mockRedirectRequester = undefined;
   }
 });
 
 test('POST /api/redirect-chain: Detects and stops infinite redirect loops', async () => {
+  mockRedirectResolver = publicDnsResolver();
   mockRedirectRequester = async () => ({
     statusCode: 302,
     statusText: 'Found',
@@ -597,11 +623,13 @@ test('POST /api/redirect-chain: Detects and stops infinite redirect loops', asyn
     assert.equal(res.data.status, 'REDIRECT_LOOP');
     assert.ok(res.data.findings.some((f: { id: string }) => f.id.includes('loop-detected')));
   } finally {
+    mockRedirectResolver = undefined;
     mockRedirectRequester = undefined;
   }
 });
 
 test('POST /api/redirect-chain: Enforces maximum 5 hops limit safely', async () => {
+  mockRedirectResolver = publicDnsResolver();
   let hopNum = 0;
   mockRedirectRequester = async () => {
     hopNum++;
@@ -619,11 +647,13 @@ test('POST /api/redirect-chain: Enforces maximum 5 hops limit safely', async () 
     assert.equal(res.data.status, 'MAX_HOPS_EXCEEDED');
     assert.ok(res.data.findings.some((f: { id: string }) => f.id === 'max-hops-exceeded'));
   } finally {
+    mockRedirectResolver = undefined;
     mockRedirectRequester = undefined;
   }
 });
 
 test('POST /api/redirect-chain: Hop timeout scenario returns TIMEOUT status safely', async () => {
+  mockRedirectResolver = publicDnsResolver();
   mockRedirectRequester = async () => {
     const err = new Error('HOP_TIMEOUT');
     throw err;
@@ -635,6 +665,7 @@ test('POST /api/redirect-chain: Hop timeout scenario returns TIMEOUT status safe
     assert.equal(res.data.status, 'TIMEOUT');
     assert.ok(res.data.statusMessage?.includes('timed out'));
   } finally {
+    mockRedirectResolver = undefined;
     mockRedirectRequester = undefined;
   }
 });
