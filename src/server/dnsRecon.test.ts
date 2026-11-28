@@ -13,6 +13,12 @@ import {
   validateRdapOutboundUrl,
   clearRdapBootstrapCacheForTesting,
   resolveRdapBaseUrl,
+  getIanaRdapBootstrap,
+  ResponseSizeLimitError,
+  readResponseBodyWithByteLimit,
+  createPinnedLookup,
+  ipMatches,
+  pinnedHttpsFetch,
 } from './dnsRecon.js';
 
 // 1. Valid Domain with A, AAAA, and MX Records
@@ -553,6 +559,267 @@ test('RDAP: Handles oversized RDAP response body safely (> 512KB)', async () => 
   assert.equal(result.status, 'error');
   assert.ok(result.message?.includes('size limit'));
 });
+
+// 23. Streaming Response-Size Limits: Oversized streamed bootstrap without Content-Length
+test('IANA Bootstrap: Handles oversized streamed bootstrap response without Content-Length (> 1MB)', async () => {
+  clearRdapBootstrapCacheForTesting();
+  let cancelled = false;
+  const chunk64k = new Uint8Array(64 * 1024);
+  const stream = new ReadableStream({
+    start(controller) {
+      // 20 chunks of 64KB = 1,280KB > 1,048,576 bytes
+      for (let i = 0; i < 20; i++) {
+        controller.enqueue(chunk64k);
+      }
+    },
+    cancel() {
+      cancelled = true;
+    },
+  });
+
+  const oversizedStreamFetch: typeof fetch = async () => {
+    return new Response(stream, {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' }, // No Content-Length
+    });
+  };
+
+  const bootstrap = await getIanaRdapBootstrap(oversizedStreamFetch);
+  assert.equal(bootstrap, null);
+  assert.equal(cancelled, true, 'Stream reader should be cancelled when 1MB limit is exceeded');
+  clearRdapBootstrapCacheForTesting();
+});
+
+// 24. Streaming Response-Size Limits: Oversized streamed RDAP without Content-Length
+test('RDAP: Handles oversized streamed RDAP response without Content-Length (> 512KB)', async () => {
+  let cancelled = false;
+  const chunk64k = new Uint8Array(64 * 1024);
+
+  const oversizedStreamFetch: typeof fetch = async (url) => {
+    const urlStr = url.toString();
+    if (urlStr.includes('iana.org')) {
+      return new Response(
+        JSON.stringify({ version: '1.0', publication: '2026-01-01', services: [] }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+
+    const stream = new ReadableStream({
+      start(controller) {
+        // 12 chunks of 64KB = 768KB > 524,288 bytes
+        for (let i = 0; i < 12; i++) {
+          controller.enqueue(chunk64k);
+        }
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+
+    return new Response(stream, {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' }, // No Content-Length
+    });
+  };
+
+  const result = await performRdapLookup('example.com', oversizedStreamFetch);
+  assert.equal(result.status, 'error');
+  assert.ok(result.message?.includes('size limit'));
+  assert.equal(cancelled, true, 'Stream reader should be cancelled when 512KB limit is exceeded');
+});
+
+// 25. Streaming Response-Size Limits: Chunked responses exceeding limits halts reading immediately
+test('Streaming Limits: Chunked response exceeding limits halts reading immediately', async () => {
+  let chunksDelivered = 0;
+  const chunk50k = new Uint8Array(50 * 1024);
+  const stream = new ReadableStream({
+    pull(controller) {
+      chunksDelivered++;
+      controller.enqueue(chunk50k);
+    },
+  });
+
+  const response = new Response(stream, {
+    status: 200,
+    headers: { 'Transfer-Encoding': 'chunked' },
+  });
+
+  await assert.rejects(
+    () => readResponseBodyWithByteLimit(response, 200 * 1024, 'chunked-test'),
+    (err: unknown) => err instanceof ResponseSizeLimitError
+  );
+  // With 50KB chunks and a 200KB limit, reading must halt as soon as 5 chunks (250KB) are read
+  assert.ok(chunksDelivered <= 6, `Should stop pulling chunks promptly, got ${chunksDelivered}`);
+});
+
+// 26. Streaming Response-Size Limits: Stream cancellation verification
+test('Streaming Limits: readResponseBodyWithByteLimit cancels reader with cancellation reason', async () => {
+  let cancelReason: unknown = null;
+  const stream = new ReadableStream({
+    start(controller) {
+      controller.enqueue(new Uint8Array(200));
+      controller.enqueue(new Uint8Array(200));
+    },
+    cancel(reason) {
+      cancelReason = reason;
+    },
+  });
+
+  const response = new Response(stream);
+  await assert.rejects(
+    () => readResponseBodyWithByteLimit(response, 250, 'cancellation-test'),
+    (err: unknown) => err instanceof ResponseSizeLimitError
+  );
+  assert.ok(cancelReason !== null, 'Stream reader must invoke cancel with a reason');
+});
+
+// 27. Streaming Response-Size Limits: Measures actual UTF-8 bytes, not JavaScript string characters
+test('Streaming Limits: Measures actual UTF-8 bytes, not JavaScript string characters', async () => {
+  // '🔥' is 1 JS code point (length 2 in UTF-16 code units), but 4 bytes in UTF-8
+  // 60 fire emojis = 120 UTF-16 code units in string length, but 240 bytes in UTF-8
+  const fireString = '🔥'.repeat(60);
+  const encodedBytes = new TextEncoder().encode(fireString);
+  assert.equal(fireString.length, 120); // 120 characters / UTF-16 code units
+  assert.equal(encodedBytes.byteLength, 240); // 240 UTF-8 bytes
+
+  // If byte limit is 150 bytes: string characters (120) < 150, but bytes (240) > 150!
+  const stream = new ReadableStream({
+    start(controller) {
+      controller.enqueue(encodedBytes);
+      controller.close();
+    },
+  });
+
+  const response = new Response(stream);
+  await assert.rejects(
+    () => readResponseBodyWithByteLimit(response, 150, 'byte-measure-test'),
+    (err: unknown) => {
+      assert.ok(err instanceof ResponseSizeLimitError);
+      assert.ok(err.message.includes('150 bytes'));
+      assert.ok(err.message.includes('240 bytes'));
+      return true;
+    }
+  );
+});
+
+// 28. DNS Pinning: createPinnedLookup resolves exclusively to pinned IP bypassing OS DNS
+test('DNS Pinning: createPinnedLookup resolves exclusively to pinned IP bypassing OS DNS', () => {
+  const pinnedIp = '93.184.215.14';
+  const lookup = createPinnedLookup(pinnedIp);
+
+  let returnedAddress = '';
+  let returnedFamily = 0;
+  lookup('malicious-rebind.attacker.com', {}, (err, address, family) => {
+    assert.equal(err, null);
+    returnedAddress = address as string;
+    returnedFamily = family as number;
+  });
+
+  assert.equal(returnedAddress, pinnedIp);
+  assert.equal(returnedFamily, 4);
+
+  // Test with { all: true }
+  let returnedAll: Array<{ address: string; family: number }> = [];
+  lookup('malicious-rebind.attacker.com', { all: true }, (err, addresses) => {
+    assert.equal(err, null);
+    returnedAll = addresses as Array<{ address: string; family: number }>;
+  });
+
+  assert.equal(returnedAll.length, 1);
+  assert.equal(returnedAll[0].address, pinnedIp);
+  assert.equal(returnedAll[0].family, 4);
+});
+
+// 29. DNS Pinning: ipMatches verifies IP matching including IPv4-mapped IPv6
+test('DNS Pinning: ipMatches verifies IP matching including IPv4-mapped IPv6', () => {
+  assert.equal(ipMatches('93.184.215.14', '93.184.215.14'), true);
+  assert.equal(ipMatches('::ffff:93.184.215.14', '93.184.215.14'), true);
+  assert.equal(ipMatches('93.184.215.14', '::ffff:93.184.215.14'), true);
+  assert.equal(ipMatches('127.0.0.1', '93.184.215.14'), false);
+  assert.equal(ipMatches(undefined, '93.184.215.14'), false);
+});
+
+// 30. DNS Pinning: pinnedHttpsFetch rejects unencrypted HTTP URLs immediately
+test('DNS Pinning: pinnedHttpsFetch rejects unencrypted HTTP URLs immediately', async () => {
+  await assert.rejects(
+    () => pinnedHttpsFetch(new URL('http://insecure.example.com'), '93.184.215.14'),
+    (err: unknown) => {
+      assert.ok(err instanceof Error);
+      assert.ok(err.message.includes('Only HTTPS is permitted'));
+      return true;
+    }
+  );
+});
+
+// 31. DNS Pinning: Rejects redirects resolving to Carrier-Grade NAT (RFC 6598) or private IPs
+test('DNS Pinning: Rejects redirects resolving to Carrier-Grade NAT (RFC 6598) or private IPs', async () => {
+  const restrictedResolver: DnsResolverInterface = {
+    resolve4: async (hostname) => {
+      if (hostname === 'cgnat-redirect.attacker.org') return ['100.64.0.1'];
+      if (hostname === 'rfc1918-redirect.attacker.org') return ['10.0.0.1'];
+      return ['93.184.215.14'];
+    },
+    resolve6: async () => [],
+    resolveMx: async () => [],
+  };
+
+  const redirectCgnatFetch: typeof fetch = async () => {
+    return new Response(null, {
+      status: 302,
+      headers: { Location: 'https://cgnat-redirect.attacker.org/domain/example.com' },
+    });
+  };
+
+  const r1 = await performRdapLookup('example.com', redirectCgnatFetch, restrictedResolver);
+  assert.equal(r1.status, 'error');
+  assert.ok(r1.message?.includes('restricted address') || r1.message?.includes('security policy'));
+
+  const redirectRfc1918Fetch: typeof fetch = async () => {
+    return new Response(null, {
+      status: 302,
+      headers: { Location: 'https://rfc1918-redirect.attacker.org/domain/example.com' },
+    });
+  };
+
+  const r2 = await performRdapLookup('example.com', redirectRfc1918Fetch, restrictedResolver);
+  assert.equal(r2.status, 'error');
+  assert.ok(r2.message?.includes('restricted address') || r2.message?.includes('security policy'));
+});
+
+// 32. DNS Pinning: Fails closed on RDAP host DNS resolution timeout
+test('DNS Pinning: Fails closed on RDAP host DNS resolution timeout', async () => {
+  const timeoutResolver: DnsResolverInterface = {
+    resolve4: async () => new Promise((resolve) => setTimeout(() => resolve([]), 5000)),
+    resolve6: async () => new Promise((resolve) => setTimeout(() => resolve([]), 5000)),
+    resolveMx: async () => [],
+  };
+
+  const result = await performRdapLookup('example.com', fetch, timeoutResolver);
+  assert.equal(result.status, 'timeout');
+  assert.ok(result.message?.includes('timed out'));
+});
+
+// 33. DNS Pinning: Fails closed on RDAP host DNS resolution error (ENOTFOUND / no records)
+test('DNS Pinning: Fails closed on RDAP host DNS resolution error (ENOTFOUND / no records)', async () => {
+  const failResolver: DnsResolverInterface = {
+    resolve4: async () => {
+      const err = new Error('getaddrinfo ENOTFOUND rdap.verisign.com');
+      (err as unknown as { code: string }).code = 'ENOTFOUND';
+      throw err;
+    },
+    resolve6: async () => {
+      const err = new Error('getaddrinfo ENOTFOUND rdap.verisign.com');
+      (err as unknown as { code: string }).code = 'ENOTFOUND';
+      throw err;
+    },
+    resolveMx: async () => [],
+  };
+
+  const result = await performRdapLookup('example.com', fetch, failResolver);
+  assert.equal(result.status, 'error');
+  assert.ok(result.message?.includes('network or DNS failure') || result.message?.includes('DNS resolution failed'));
+});
+
 
 
 

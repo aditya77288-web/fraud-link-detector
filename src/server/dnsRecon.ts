@@ -1,4 +1,6 @@
 import dnsPromises from 'node:dns/promises';
+import https from 'node:https';
+import { Readable } from 'node:stream';
 import {
   ReconResult,
   DnsRecordsData,
@@ -240,6 +242,103 @@ export function clearRdapBootstrapCacheForTesting(): void {
   bootstrapCache = { data: null, timestamp: 0 };
 }
 
+/**
+ * Custom error thrown when a streaming or header response body exceeds the allocated byte limit.
+ */
+export class ResponseSizeLimitError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ResponseSizeLimitError';
+  }
+}
+
+/**
+ * Reads a response body stream enforcing a strict byte limit.
+ * - Checks Content-Length header early when available.
+ * - Streams chunks and accumulates byte counts (Uint8Array.byteLength), measuring true bytes, not string characters.
+ * - Cancels the stream reader immediately (`await reader.cancel()`) if byte limit is exceeded.
+ * - Handles missing Content-Length, chunked transfers, and stream errors safely.
+ */
+export async function readResponseBodyWithByteLimit(
+  response: Response,
+  maxBytes: number,
+  label: string
+): Promise<string> {
+  // 1. Early Content-Length check
+  const contentLengthHeader = response.headers.get('content-length');
+  if (contentLengthHeader) {
+    const contentLength = parseInt(contentLengthHeader, 10);
+    if (!isNaN(contentLength) && contentLength > maxBytes) {
+      if (response.body) {
+        try {
+          const reader = response.body.getReader();
+          await reader.cancel('Content-Length exceeded limit');
+        } catch {}
+      }
+      throw new ResponseSizeLimitError(
+        `${label} response Content-Length header (${contentLength} bytes) exceeds limit of ${maxBytes} bytes.`
+      );
+    }
+  }
+
+  // If no body exists, return empty string
+  if (!response.body) {
+    return '';
+  }
+
+  const reader = response.body.getReader();
+  let totalBytes = 0;
+  const chunks: Uint8Array[] = [];
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      if (value) {
+        let chunkBytes: Uint8Array;
+        if (typeof value === 'string') {
+          chunkBytes = new TextEncoder().encode(value);
+        } else if ((value as unknown) instanceof Uint8Array) {
+          chunkBytes = value as unknown as Uint8Array;
+        } else if ((value as unknown) instanceof ArrayBuffer) {
+          chunkBytes = new Uint8Array(value as unknown as ArrayBuffer);
+        } else {
+          chunkBytes = new Uint8Array(value as unknown as ArrayLike<number>);
+        }
+
+        totalBytes += chunkBytes.byteLength;
+        if (totalBytes > maxBytes) {
+          try {
+            await reader.cancel('Response body stream exceeded byte limit');
+          } catch {}
+          throw new ResponseSizeLimitError(
+            `${label} response stream exceeded byte limit of ${maxBytes} bytes (read ${totalBytes} bytes).`
+          );
+        }
+        chunks.push(chunkBytes);
+      }
+    }
+  } catch (err) {
+    if (!(err instanceof ResponseSizeLimitError)) {
+      try {
+        await reader.cancel('Stream reading error');
+      } catch {}
+    }
+    throw err;
+  }
+
+  // Combine chunks and decode as UTF-8
+  const combined = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    combined.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder('utf-8').decode(combined);
+}
+
 export async function getIanaRdapBootstrap(
   fetchFn: typeof fetch = fetch
 ): Promise<IanaRdapBootstrapJson | null> {
@@ -261,18 +360,7 @@ export async function getIanaRdapBootstrap(
       return bootstrapCache.data;
     }
 
-    const contentLength = res.headers.get('content-length');
-    if (contentLength && parseInt(contentLength, 10) > 1048576) {
-      console.error(`IANA RDAP bootstrap response exceeded safety size limit (${contentLength} bytes).`);
-      return bootstrapCache.data;
-    }
-
-    const text = await res.text();
-    if (text.length > 1048576) {
-      console.error(`IANA RDAP bootstrap response body exceeded safety size limit (${text.length} chars).`);
-      return bootstrapCache.data;
-    }
-
+    const text = await readResponseBodyWithByteLimit(res, 1048576, 'IANA RDAP bootstrap');
     const json = JSON.parse(text) as IanaRdapBootstrapJson;
     if (
       json &&
@@ -291,8 +379,12 @@ export async function getIanaRdapBootstrap(
     } else {
       console.error('Invalid IANA RDAP bootstrap structure: services array is malformed.');
     }
-  } catch (err) {
-    console.error('Failed to fetch IANA RDAP bootstrap registry:', err instanceof Error ? err.message : 'Unknown');
+  } catch (err: unknown) {
+    if (err instanceof ResponseSizeLimitError) {
+      console.error(`IANA RDAP bootstrap response exceeded safety size limit: ${err.message}`);
+    } else {
+      console.error('Failed to fetch IANA RDAP bootstrap registry:', err instanceof Error ? err.message : 'Unknown');
+    }
   }
 
   return bootstrapCache.data;
@@ -375,10 +467,213 @@ export function constructRdapQueryUrl(baseUrl: string, domain: string): string {
  * - Reject special-use, loopback, link-local, private, or reserved hostnames and IPs
  * - DNS resolution check to mitigate DNS rebinding and private infrastructure access
  */
+/**
+ * Creates a custom DNS lookup function that always resolves to the pinned IP address.
+ * Bypasses OS DNS resolution at connect time to prevent DNS rebinding / TOCTOU attacks.
+ */
+export function createPinnedLookup(
+  pinnedIp: string
+): (
+  hostname: string,
+  optionsOrCallback: unknown,
+  callback?: (
+    err: NodeJS.ErrnoException | null,
+    address: string | Array<{ address: string; family: number }>,
+    family?: number
+  ) => void
+) => void {
+  const isIpV6 = pinnedIp.includes(':');
+  const family = isIpV6 ? 6 : 4;
+
+  return (
+    _hostname: string,
+    optionsOrCallback: unknown,
+    callback?: (
+      err: NodeJS.ErrnoException | null,
+      address: string | Array<{ address: string; family: number }>,
+      family?: number
+    ) => void
+  ) => {
+    const cb = (
+      typeof optionsOrCallback === 'function' ? optionsOrCallback : callback
+    ) as
+      | ((
+          err: NodeJS.ErrnoException | null,
+          address: string | Array<{ address: string; family: number }>,
+          family?: number
+        ) => void)
+      | undefined;
+    if (!cb) return;
+
+    const opts = typeof optionsOrCallback === 'object' && optionsOrCallback ? optionsOrCallback : {};
+    if ((opts as { all?: boolean }).all) {
+      cb(null, [{ address: pinnedIp, family }]);
+    } else {
+      cb(null, pinnedIp, family);
+    }
+  };
+}
+
+/**
+ * Normalizes an IP string by stripping any ::ffff: IPv4-mapped prefix.
+ */
+function normalizeIp(ip: string): string {
+  return ip.trim().toLowerCase().replace(/^::ffff:/, '');
+}
+
+/**
+ * Checks if two IP addresses match, taking into account IPv4-mapped IPv6 prefixes.
+ */
+export function ipMatches(socketIp?: string, expectedIp?: string): boolean {
+  if (!socketIp || !expectedIp) return false;
+  return normalizeIp(socketIp) === normalizeIp(expectedIp);
+}
+
+/**
+ * Performs an HTTPS request pinned directly to a validated IP address.
+ * - Connects socket to `pinnedIp` via custom lookup.
+ * - Sets SNI hostname via `servername: targetUrl.hostname` to preserve TLS certificate validation.
+ * - Verifies socket remote address matches `pinnedIp`.
+ * - Converts `http.IncomingMessage` to standard Web `Response`.
+ */
+export function pinnedHttpsFetch(
+  targetUrl: URL,
+  pinnedIp: string,
+  options: {
+    method?: string;
+    headers?: Record<string, string>;
+    timeoutMs?: number;
+    signal?: AbortSignal;
+  } = {}
+): Promise<Response> {
+  return new Promise((resolve, reject) => {
+    if (targetUrl.protocol !== 'https:') {
+      return reject(new Error(`Insecure protocol scheme "${targetUrl.protocol}". Only HTTPS is permitted.`));
+    }
+
+    const port = targetUrl.port ? Number(targetUrl.port) : 443;
+    const method = options.method || 'GET';
+    const timeoutMs = options.timeoutMs ?? 4000;
+
+    let settled = false;
+
+    const reqOptions: https.RequestOptions = {
+      protocol: targetUrl.protocol,
+      hostname: targetUrl.hostname,
+      port,
+      path: `${targetUrl.pathname || '/'}${targetUrl.search || ''}`,
+      method,
+      headers: {
+        Host: targetUrl.host,
+        Accept: 'application/rdap+json, application/json',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) FraudLinkDetector/1.0',
+        Connection: 'close',
+        ...options.headers,
+      },
+      servername: targetUrl.hostname,
+      lookup: createPinnedLookup(pinnedIp) as unknown as https.RequestOptions['lookup'],
+      timeout: timeoutMs,
+    };
+
+    const req = https.request(reqOptions, (res) => {
+      // Verify that the socket connected to the validated IP
+      const remoteAddress = res.socket?.remoteAddress;
+      if (!ipMatches(remoteAddress, pinnedIp)) {
+        req.destroy(new Error(`Socket remote address mismatch: connected to ${remoteAddress}, expected ${pinnedIp}`));
+        if (!settled) {
+          settled = true;
+          const mismatchErr = new Error(`Connection security error: socket connected to unverified address ${remoteAddress}`);
+          mismatchErr.name = 'SecurityError';
+          reject(mismatchErr);
+        }
+        return;
+      }
+
+      // Convert Node headers to web Headers
+      const webHeaders = new Headers();
+      for (const [key, val] of Object.entries(res.headers)) {
+        if (val === undefined) continue;
+        if (Array.isArray(val)) {
+          for (const v of val) webHeaders.append(key, v);
+        } else {
+          webHeaders.set(key, val);
+        }
+      }
+
+      const webStream = Readable.toWeb(res) as ReadableStream<Uint8Array>;
+      const webResponse = new Response(webStream, {
+        status: res.statusCode || 200,
+        statusText: res.statusMessage || 'OK',
+        headers: webHeaders,
+      });
+
+      if (!settled) {
+        settled = true;
+        resolve(webResponse);
+      }
+    });
+
+    if (options.signal) {
+      if (options.signal.aborted) {
+        req.destroy(new Error('AbortError'));
+        settled = true;
+        const abortErr = new Error('The operation was aborted');
+        abortErr.name = 'AbortError';
+        return reject(abortErr);
+      }
+      options.signal.addEventListener('abort', () => {
+        req.destroy(new Error('AbortError'));
+        if (!settled) {
+          settled = true;
+          const abortErr = new Error('The operation was aborted');
+          abortErr.name = 'AbortError';
+          reject(abortErr);
+        }
+      });
+    }
+
+    req.on('timeout', () => {
+      req.destroy(new Error('TimeoutError'));
+      if (!settled) {
+        settled = true;
+        const timeoutErr = new Error(`Request timed out after ${timeoutMs}ms`);
+        timeoutErr.name = 'TimeoutError';
+        reject(timeoutErr);
+      }
+    });
+
+    req.on('error', (err) => {
+      if (!settled) {
+        settled = true;
+        reject(err);
+      }
+    });
+
+    req.end();
+  });
+}
+
+export interface RdapValidationResult {
+  valid: boolean;
+  error?: string;
+  url?: URL;
+  pinnedIp?: string;
+  isTimeout?: boolean;
+  isDnsError?: boolean;
+}
+
+/**
+ * Validates an outbound RDAP URL:
+ * - Strict HTTPS enforcement
+ * - Reject special-use, loopback, link-local, private, or reserved hostnames and IPs
+ * - DNS resolution check to mitigate DNS rebinding and private infrastructure access
+ * - Pins validated public IP address for connection-level enforcement
+ * - Fails closed on DNS lookup errors or timeouts
+ */
 export async function validateRdapOutboundUrl(
   urlStr: string,
   resolver: DnsResolverInterface = defaultDnsResolver
-): Promise<{ valid: boolean; error?: string; url?: URL }> {
+): Promise<RdapValidationResult> {
   let parsed: URL;
   try {
     parsed = new URL(urlStr);
@@ -395,22 +690,24 @@ export async function validateRdapOutboundUrl(
     return { valid: false, error: 'Missing hostname in RDAP destination' };
   }
 
-  if (isSpecialUseHostname(hostname)) {
+  const unbracketedHost = hostname.replace(/^\[|\]$/g, '');
+
+  if (isSpecialUseHostname(hostname) || isSpecialUseHostname(unbracketedHost)) {
     return { valid: false, error: `Destination host "${hostname}" is a reserved or special-use address.` };
   }
 
-  if (isIpv4(hostname)) {
-    if (isSpecialUseIpv4(hostname)) {
-      return { valid: false, error: `Destination IP "${hostname}" is a private or reserved IPv4 address.` };
+  if (isIpv4(unbracketedHost)) {
+    if (isSpecialUseIpv4(unbracketedHost)) {
+      return { valid: false, error: `Destination IP "${unbracketedHost}" is a private or reserved IPv4 address.` };
     }
-    return { valid: true, url: parsed };
+    return { valid: true, url: parsed, pinnedIp: unbracketedHost };
   }
 
-  if (isIpv6(hostname)) {
-    if (isSpecialUseIpv6(hostname)) {
-      return { valid: false, error: `Destination IP "${hostname}" is a private or reserved IPv6 address.` };
+  if (isIpv6(unbracketedHost)) {
+    if (isSpecialUseIpv6(unbracketedHost)) {
+      return { valid: false, error: `Destination IP "${unbracketedHost}" is a private or reserved IPv6 address.` };
     }
-    return { valid: true, url: parsed };
+    return { valid: true, url: parsed, pinnedIp: unbracketedHost };
   }
 
   try {
@@ -419,22 +716,46 @@ export async function validateRdapOutboundUrl(
       withTimeout(resolver.resolve6(hostname), 2000, 'RDAP host IPv6 lookup'),
     ]);
 
+    const isTimeout =
+      (v4Result.status === 'rejected' && v4Result.reason?.name === 'TimeoutError') ||
+      (v6Result.status === 'rejected' && v6Result.reason?.name === 'TimeoutError');
+
+    if (isTimeout) {
+      return {
+        valid: false,
+        error: `DNS lookup timed out for RDAP host "${hostname}".`,
+        isTimeout: true,
+      };
+    }
+
     const v4Ips = v4Result.status === 'fulfilled' ? v4Result.value : [];
     const v6Ips = v6Result.status === 'fulfilled' ? v6Result.value : [];
     const allIps = [...v4Ips, ...v6Ips];
 
-    if (allIps.length > 0) {
-      for (const ip of allIps) {
-        if (isSpecialUseIpv4(ip) || isSpecialUseIpv6(ip)) {
-          return { valid: false, error: `Destination host "${hostname}" resolves to restricted address ${ip}.` };
-        }
+    if (allIps.length === 0) {
+      return {
+        valid: false,
+        error: `DNS resolution failed for RDAP host "${hostname}".`,
+        isDnsError: true,
+      };
+    }
+
+    for (const ip of allIps) {
+      if (isSpecialUseIpv4(ip) || isSpecialUseIpv6(ip)) {
+        return { valid: false, error: `Destination host "${hostname}" resolves to restricted address ${ip}.` };
       }
     }
-  } catch {
-    // If DNS check fails, network layer will handle resolution failure
-  }
 
-  return { valid: true, url: parsed };
+    return { valid: true, url: parsed, pinnedIp: allIps[0] };
+  } catch (err: unknown) {
+    const isTimeout = err instanceof Error && err.name === 'TimeoutError';
+    return {
+      valid: false,
+      error: `DNS resolution error for RDAP host "${hostname}".`,
+      isTimeout,
+      isDnsError: !isTimeout,
+    };
+  }
 }
 
 /**
@@ -471,6 +792,20 @@ export async function performRdapLookup(
 
     const validation = await validateRdapOutboundUrl(currentUrl, resolver);
     if (!validation.valid) {
+      if (validation.isTimeout) {
+        console.error(`RDAP diagnostic classification [TIMEOUT] for endpoint host ${endpointHostname}: ${validation.error}`);
+        return {
+          status: 'timeout',
+          message: 'RDAP request timed out after 4 seconds.',
+        };
+      }
+      if (validation.isDnsError) {
+        console.error(`RDAP diagnostic classification [DNS_FAILURE] for endpoint host ${endpointHostname}: ${validation.error}`);
+        return {
+          status: 'error',
+          message: 'Unable to connect to RDAP service due to network or DNS failure.',
+        };
+      }
       console.error(`RDAP diagnostic classification [SECURITY_BLOCKED]: ${validation.error}`);
       return {
         status: 'error',
@@ -478,15 +813,29 @@ export async function performRdapLookup(
       };
     }
 
+    const pinnedIp = validation.pinnedIp!;
+    const parsedTargetUrl = validation.url!;
+
     try {
-      response = await fetchFn(currentUrl, {
-        method: 'GET',
-        headers: {
-          Accept: 'application/rdap+json, application/json',
-        },
-        redirect: 'manual',
-        signal: AbortSignal.timeout(4000), // 4-second timeout
-      });
+      if (fetchFn === fetch) {
+        response = await pinnedHttpsFetch(parsedTargetUrl, pinnedIp, {
+          method: 'GET',
+          headers: {
+            Accept: 'application/rdap+json, application/json',
+          },
+          timeoutMs: 4000,
+        });
+      } else {
+        response = await fetchFn(currentUrl, {
+          method: 'GET',
+          headers: {
+            Accept: 'application/rdap+json, application/json',
+          },
+          redirect: 'manual',
+          signal: AbortSignal.timeout(4000),
+          ...({ pinnedIp } as unknown as object),
+        });
+      }
     } catch (err: unknown) {
       const isTimeout =
         err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError');
@@ -558,32 +907,22 @@ export async function performRdapLookup(
     };
   }
 
-  // Response size guard: check Content-Length if present (> 512KB rejected)
-  const contentLength = response.headers.get('content-length');
-  if (contentLength && parseInt(contentLength, 10) > 524288) {
-    console.error(`RDAP diagnostic classification [SIZE_LIMIT_EXCEEDED]: endpoint host ${endpointHostname}, Content-Length: ${contentLength}`);
-    return {
-      status: 'error',
-      message: 'RDAP response exceeded safety size limit.',
-    };
-  }
-
+  // Response size guard: stream response up to 512KB (524288 bytes)
   let text: string;
   try {
-    text = await response.text();
+    text = await readResponseBodyWithByteLimit(response, 524288, 'RDAP server');
   } catch (err: unknown) {
+    if (err instanceof ResponseSizeLimitError) {
+      console.error(`RDAP diagnostic classification [SIZE_LIMIT_EXCEEDED]: endpoint host ${endpointHostname}, ${err.message}`);
+      return {
+        status: 'error',
+        message: 'RDAP response exceeded safety size limit.',
+      };
+    }
     console.error(`RDAP diagnostic classification [NETWORK_FAILURE]: endpoint host ${endpointHostname}`, err instanceof Error ? err.message : '');
     return {
       status: 'error',
       message: 'Unable to read RDAP response.',
-    };
-  }
-
-  if (text.length > 524288) {
-    console.error(`RDAP diagnostic classification [SIZE_LIMIT_EXCEEDED]: endpoint host ${endpointHostname}, body length: ${text.length}`);
-    return {
-      status: 'error',
-      message: 'RDAP response exceeded safety size limit.',
     };
   }
 
