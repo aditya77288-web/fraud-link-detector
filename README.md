@@ -47,8 +47,8 @@ A full-stack cybersecurity portfolio project for investigating suspicious links,
 | Primary purpose | Investigate suspicious URLs without opening them in the user's browser |
 | Local analysis | Deterministic URL parsing, heuristic scoring, and plain-English warnings |
 | Server-side analysis | Optional Safe Browsing lookup, DNS/RDAP reconnaissance, redirect inspection, and screenshot preview |
-| Defensive focus | URL validation, SSRF controls, DNS pinning for redirect requests, timeouts, rate limits, and sensitive-value redaction |
-| Verification | Automated Node.js tests, TypeScript type-checking, and production build in GitHub Actions |
+| Defensive focus | URL validation, SSRF controls, connection-level IP pinning for outbound inspection, bounded RDAP response streams, timeouts, rate limits, and sensitive-value redaction |
+| Verification | Latest reported checkpoint: 181 tests passing, TypeScript checks, lint, and production build; GitHub Actions badge shows current CI status |
 | License | MIT |
 
 **Project status:** Active development. This is an investigative aid, not a replacement for endpoint protection, a browser security product, or a professional security assessment. The project has not received an independent third-party security audit.
