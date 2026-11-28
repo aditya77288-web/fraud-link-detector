@@ -133,7 +133,7 @@ To ensure complete technical transparency, features are categorized into impleme
 - [x] **DNS Reconnaissance**: Concurrent lookups of `A`, `AAAA`, and `MX` records with individual 3-second timeouts via `node:dns/promises`.
 - [x] **Domain Age & RDAP Analysis**: Automated query to ICANN bootstrap RDAP services to resolve domain registration age, registrar name, and creation timestamps. Flags domains registered $\le 30$ days ago.
 - [x] **SSRF-Protected Redirect Chain Inspector**: Hop-by-hop redirect analysis (maximum 5 hops) using `HEAD` requests (with zero-body `GET` fallback).
-- [x] **DNS Rebinding & Connection Pinning**: Sockets explicitly pinned to pre-validated IP addresses via a custom HTTP/HTTPS agent lookup handler to eliminate Time-of-Check to Time-of-Use (TOCTOU) exploits.
+- [x] **DNS Rebinding & Connection Pinning**: RDAP outbound HTTPS connections use a custom Node.js DNS lookup to pin the socket to a pre-validated public IP; the connected socket's remote address is checked against that IP, while TLS hostname verification remains enabled.
 - [x] **Protocol Downgrade Detection**: Flags redirects transitioning from `https://` to insecure `http://`.
 - [x] **Sensitive Parameter Redaction**: Strips passwords, auth tokens, session IDs, and JWTs from local history storage and inspected hop locations.
 - [x] **In-Memory Rate Limiting**: Sliding-window protection (60 requests per minute for recon/redirects, 15 requests per minute for screenshots).
@@ -141,7 +141,7 @@ To ensure complete technical transparency, features are categorized into impleme
 - [x] **PWA Web Share Target (Android & Desktop)**: Receives shared suspicious links or message text from chat apps (WhatsApp, Telegram, SMS) with explicit candidate confirmation before analysis.
 - [x] **Isolated Cloud Website Screenshot**: Ephemeral cloud-rendered visual preview via external isolated sandbox (Microlink API) with local SSRF pre-flight blocking, 8-second global timeout, 2MB incremental stream ceiling, raster magic-bytes validation, and CDN privacy disclosure.
 - [x] **Privacy Labels & Layered Disclosures**: Header accurately presents `"Local URL Analysis"` and `"Privacy-Focused Processing"` badges, complemented by a dedicated Privacy Architecture card detailing all 5 processing layers.
-- [x] **Automated Test Suite**: 147 automated unit and integration tests across 12 test suites covering parser logic, risk engine rules, warning engine classifications, SSRF bypasses, API contracts, clipboard parsing, share targets, screenshot rendering, and Vercel serverless API routing.
+- [x] **Automated Test Suite**: 181 automated unit and integration tests reported passing across 12 test suites, covering parser logic, risk engine rules, warning engine classifications, SSRF protections, RDAP response handling and DNS pinning, API contracts, clipboard parsing, share targets, screenshot rendering, and Vercel serverless API routing.
 
 ### 2. Partially Implemented Features
 
@@ -188,6 +188,15 @@ const customLookup: CustomLookupFunction = (hostname, options, callback) => {
 ```
 
 The underlying TCP socket connects directly to the pre-screened IP address while preserving the original `Host` header for virtual hosting compliance.
+
+### RDAP DNS Pinning & Bounded Response Reading
+
+RDAP bootstrap and registry requests use a separate outbound-request path with destination validation before connection:
+- The IANA RDAP DNS bootstrap response is limited to **1 MiB**; individual RDAP registry responses are limited to **512 KiB**.
+- `Content-Length` is checked when present, but the response stream is also counted by actual byte length so missing or misleading headers do not bypass the cap.
+- The stream reader is cancelled when the byte limit is exceeded; oversized bodies are not fully buffered before the limit is applied.
+- Each RDAP destination, including each redirect destination, is resolved and checked against restricted address ranges. The validated address is supplied through a custom Node.js HTTPS lookup, and the connected socket's remote address is checked against the pinned address.
+- RDAP redirects are handled manually and revalidated before the next connection. HTTPS and normal TLS certificate/hostname verification are retained.
 
 ### Stream Disposal & Resource Limiting
 
@@ -532,7 +541,7 @@ npm run start
 - `npm run build`: Compiles production frontend bundle to `dist/` (`vite build`).
 - `npm run start`: Runs the production server with pre-built static assets. `cross-env` makes the `NODE_ENV=production` setting work consistently on Windows, macOS, and Linux.
 - `npm run lint`: Performs TypeScript type checking (`tsc --noEmit`).
-- `npm test`: Runs all 147 automated unit and integration test cases across 12 test specifications (`tsx --test ...`).
+- `npm test`: Runs the automated unit and integration test suite across 12 test specifications (`tsx --test ...`).
 - `npm run clean`: Removes generated `dist/` and `server.js` outputs using a cross-platform Node.js script.
 
 ---
@@ -594,13 +603,13 @@ npm run build
 ```
 
 ### Verified Test Suite Summary
-The repository currently defines **147 test cases** across **12 dedicated test specifications**. The CI workflow runs the complete suite on each push and pull request; use the CI status badge above as the current pass/fail source:
+The latest project checkpoint reports **181 passing test cases** across **12 dedicated test specifications**, with TypeScript type-checking, lint, and production build also passing. These are the latest reported local verification results; the CI status badge above remains the source of truth for the current GitHub Actions run:
 - `src/utils/urlParser.test.ts` (6 tests): RFC 3986 normalization, default ports, authority credential handling, Punycode parsing.
 - `src/utils/riskEngine.test.ts` (8 tests): Deterministic scoring rules, threshold clamping, edge-case heuristic triggers.
 - `src/utils/historyStorage.test.ts` (4 tests): Local storage persistence, LRU bounds, token and credential redaction.
 - `src/server.test.ts` (20 tests): Express rate limiter, CORS policies, health check, and threat check route handling.
 - `src/utils/threatStates.test.ts` (5 tests): Exact messaging contracts for Clean, Threat, Unconfigured, and Unavailable states.
-- `src/server/dnsRecon.test.ts` (16 tests): Asynchronous DNS lookups, RDAP bootstrap queries, timeouts, and private IP isolation.
+- `src/server/dnsRecon.test.ts`: Asynchronous DNS lookups, RDAP bootstrap queries, timeouts, restricted-address checks, streamed response-size limits, cancellation, and pinned-lookup behaviour.
 - `src/server/redirectInspector.test.ts` (15 tests): Multi-hop redirect limits, protocol downgrade alerts, SSRF defenses, loopback blocks, and connection pinning.
 - `src/utils/clipboardUrl.test.ts` (12 tests): Safe user-triggered clipboard reading, permissions rejection handling, and embedded link extraction.
 - `src/utils/shareTarget.test.ts` (9 tests): Android Web Share Target parameter parsing, candidate extraction, and query string cleanup.
