@@ -193,47 +193,65 @@ export async function querySafeBrowsing(
       let errorMessage = '';
 
       try {
-        const errorJson = (await response.json()) as {
-          error?: { code?: number; message?: string; status?: string };
-        };
-        if (errorJson?.error) {
-          errorCode = errorJson.error.code || response.status;
-          errorStatus = errorJson.error.status || '';
-          errorMessage = errorJson.error.message || '';
-          errorDetail = ` (${errorStatus || errorCode}: ${errorMessage})`;
+        const text = await response.text();
+        try {
+          const errorJson = JSON.parse(text) as {
+            error?: { code?: number; message?: string; status?: string };
+          };
+          if (errorJson?.error) {
+            errorCode = errorJson.error.code || response.status;
+            errorStatus = errorJson.error.status || '';
+            errorMessage = errorJson.error.message || '';
 
-          const lowerMsg = errorMessage.toLowerCase();
-          const lowerStatus = errorStatus.toLowerCase();
-          const hasReason = (reason: string) =>
-            lowerMsg.includes(reason.toLowerCase()) ||
-            lowerStatus.includes(reason.toLowerCase());
+            const lowerMsg = errorMessage.toLowerCase();
+            const lowerStatus = errorStatus.toLowerCase();
+            const hasReason = (reason: string) =>
+              lowerMsg.includes(reason.toLowerCase()) ||
+              lowerStatus.includes(reason.toLowerCase());
 
-          if (hasReason('SERVICE_DISABLED') || lowerMsg.includes('not enabled') || lowerStatus === 'service_disabled') {
-            errorCategory = 'API_NOT_ENABLED';
-          } else if (
-            hasReason('API_KEY_INVALID') ||
-            hasReason('INVALID_API_KEY') ||
-            lowerMsg.includes('api key not valid') ||
-            lowerMsg.includes('api_key_invalid')
-          ) {
-            errorCategory = 'API_KEY_INVALID';
-          } else if (
-            hasReason('KEY_RESTRICTIONS') ||
-            hasReason('API_KEY_RESTRICTED') ||
-            lowerMsg.includes('restricted') ||
-            lowerMsg.includes('restriction')
-          ) {
-            errorCategory = 'KEY_RESTRICTIONS';
-          } else if (errorCode === 429 || hasReason('RESOURCE_EXHAUSTED') || lowerMsg.includes('quota') || lowerStatus === 'resource_exhausted') {
-            errorCategory = 'QUOTA_EXCEEDED';
-          } else if (errorCode === 400 || hasReason('INVALID_ARGUMENT') || lowerMsg.includes('invalid argument') || lowerStatus === 'invalid_argument') {
-            errorCategory = 'INVALID_ARGUMENT';
-          } else if (errorCode === 403 || hasReason('PERMISSION_DENIED') || lowerStatus === 'permission_denied') {
-            errorCategory = 'PERMISSION_DENIED';
+            if (hasReason('SERVICE_DISABLED') || lowerMsg.includes('not enabled') || lowerStatus === 'service_disabled') {
+              errorCategory = 'API_NOT_ENABLED';
+            } else if (
+              hasReason('API_KEY_INVALID') ||
+              hasReason('INVALID_API_KEY') ||
+              lowerMsg.includes('api key not valid') ||
+              lowerMsg.includes('api_key_invalid')
+            ) {
+              errorCategory = 'API_KEY_INVALID';
+            } else if (
+              hasReason('KEY_RESTRICTIONS') ||
+              hasReason('API_KEY_RESTRICTED') ||
+              lowerMsg.includes('restricted') ||
+              lowerMsg.includes('restriction')
+            ) {
+              errorCategory = 'KEY_RESTRICTIONS';
+            } else if (errorCode === 429 || hasReason('RESOURCE_EXHAUSTED') || lowerMsg.includes('quota') || lowerStatus === 'resource_exhausted') {
+              errorCategory = 'QUOTA_EXCEEDED';
+            } else if (errorCode === 400 || hasReason('INVALID_ARGUMENT') || lowerMsg.includes('invalid argument') || lowerStatus === 'invalid_argument') {
+              errorCategory = 'INVALID_ARGUMENT';
+            } else if (errorCode === 403 || hasReason('PERMISSION_DENIED') || lowerStatus === 'permission_denied') {
+              errorCategory = 'PERMISSION_DENIED';
+            }
+
+            // Sanitize errorMessage in errorDetail to guarantee no API keys or URLs in logs
+            const sanitizedMsg = errorMessage
+              .replace(/key=[^&\s]+/gi, 'key=[REDACTED]')
+              .replace(/https?:\/\/[^\s]+/gi, '[URL_REDACTED]');
+            errorDetail = ` (${errorStatus || errorCode}: ${sanitizedMsg})`;
+          }
+        } catch {
+          // Non-JSON response body (e.g. HTML 502/503 from proxy or gateway)
+          const sanitizedText = text
+            .slice(0, 100)
+            .replace(/key=[^&\s]+/gi, 'key=[REDACTED]')
+            .replace(/https?:\/\/[^\s]+/gi, '[URL_REDACTED]')
+            .trim();
+          if (sanitizedText) {
+            errorDetail = ` (Non-JSON: ${sanitizedText})`;
           }
         }
       } catch {
-        // Fallback if error body is not JSON
+        // Fallback if response body reading fails
       }
 
       // Log structured diagnostics safely - NEVER log API key, submitted URL, or complete request URL

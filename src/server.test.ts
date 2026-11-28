@@ -449,6 +449,39 @@ test('querySafeBrowsing: classifies all error categories co-safeguarding secrets
   }
 });
 
+test('querySafeBrowsing: handles non-JSON upstream error responses (HTML/text) safely without leaking secrets', async () => {
+  const nonJsonBodies = [
+    { status: 502, text: '<html><head><title>502 Bad Gateway</title></head><body>Bad Gateway</body></html>' },
+    { status: 500, text: 'Internal Server Error' },
+    { status: 503, text: 'Service Unavailable' },
+  ];
+
+  for (const tc of nonJsonBodies) {
+    const mockFetch: typeof fetch = async () => {
+      return new Response(tc.text, {
+        status: tc.status,
+        headers: { 'Content-Type': 'text/html' },
+      });
+    };
+
+    const result = await querySafeBrowsing(
+      'https://confidential-user-domain.org/login?token=sensitive-123',
+      'super-secret-google-api-key-999',
+      mockFetch
+    );
+
+    assert.equal(result.status, 502);
+    assert.equal(result.body.configured, true);
+    assert.equal(result.body.checked, false);
+    assert.equal(result.body.error, 'Threat intelligence service is temporarily unavailable.');
+    assert.ok(!JSON.stringify(result.body).includes('super-secret-google-api-key-999'));
+    assert.ok(!JSON.stringify(result.body).includes('confidential-user-domain.org'));
+    assert.ok(!JSON.stringify(result.body).includes('sensitive-123'));
+    assert.ok(!JSON.stringify(result.body).includes('Bad Gateway'));
+  }
+});
+
+
 
 
 

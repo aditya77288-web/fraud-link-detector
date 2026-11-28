@@ -9,6 +9,10 @@ import {
   performFullRecon,
   generateReconFindings,
   DnsResolverInterface,
+  constructRdapQueryUrl,
+  validateRdapOutboundUrl,
+  clearRdapBootstrapCacheForTesting,
+  resolveRdapBaseUrl,
 } from './dnsRecon.js';
 
 // 1. Valid Domain with A, AAAA, and MX Records
@@ -320,5 +324,235 @@ test('RDAP Status Contract: Distinguishes available, redacted, unavailable, unsu
   assert.equal(r6.status, 'error');
   assert.ok(!r6.message?.includes('privacy'));
 });
+
+// 18. Correct /domain/{domain} RDAP Path Construction
+test('RDAP Endpoint Construction: constructRdapQueryUrl correctly builds /domain/{domain} path', () => {
+  assert.equal(
+    constructRdapQueryUrl('https://rdap.verisign.com/com/v1/', 'example.com'),
+    'https://rdap.verisign.com/com/v1/domain/example.com'
+  );
+  assert.equal(
+    constructRdapQueryUrl('https://rdap.org', 'test.org'),
+    'https://rdap.org/domain/test.org'
+  );
+  assert.equal(
+    constructRdapQueryUrl('https://rdap.org/', 'test.org'),
+    'https://rdap.org/domain/test.org'
+  );
+  assert.equal(
+    constructRdapQueryUrl('https://rdap.org/domain/', 'sub.domain.co'),
+    'https://rdap.org/domain/sub.domain.co'
+  );
+});
+
+test('RDAP Endpoint Construction: performRdapLookup queries exact /domain/{domain} path', async () => {
+  let requestedUrl = '';
+  const mockFetch: typeof fetch = async (url) => {
+    requestedUrl = typeof url === 'string' ? url : url.toString();
+    return new Response(JSON.stringify({
+      events: [{ eventAction: 'registration', eventDate: '2021-05-10T00:00:00Z' }]
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  };
+
+  await performRdapLookup('example.com', mockFetch);
+  assert.ok(requestedUrl.includes('/domain/example.com'), `Requested URL "${requestedUrl}" must contain /domain/example.com`);
+  assert.ok(!requestedUrl.includes('/domain/domain/'), 'Must not duplicate /domain/');
+});
+
+// 19. IANA Bootstrap RFC 9224 Longest-Match TLD Selection
+test('IANA Bootstrap: RFC 9224 longest-match TLD selection matches most specific suffix', async () => {
+  clearRdapBootstrapCacheForTesting();
+  const mockBootstrap = {
+    version: '1.0',
+    publication: '2026-01-01',
+    services: [
+      [['uk'], ['https://rdap.nominet.uk/']],
+      [['co.uk'], ['https://rdap.specific.uk/']],
+      [['fed.us'], ['https://rdap.fed.gov/']],
+      [['us'], ['https://rdap.us/']],
+    ],
+  };
+
+  const mockFetch: typeof fetch = async () => {
+    return new Response(JSON.stringify(mockBootstrap), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  };
+
+  // 'example.co.uk' has 2 matching labels for 'co.uk' vs 1 for 'uk' -> selects co.uk server
+  const urlCoUk = await resolveRdapBaseUrl('example.co.uk', mockFetch);
+  assert.equal(urlCoUk, 'https://rdap.specific.uk/');
+
+  // 'example.uk' only matches 'uk' (1 label)
+  clearRdapBootstrapCacheForTesting();
+  const urlUk = await resolveRdapBaseUrl('example.uk', mockFetch);
+  assert.equal(urlUk, 'https://rdap.nominet.uk/');
+
+  // 'sub.dept.fed.us' matches 'fed.us' (2 labels) over 'us' (1 label)
+  clearRdapBootstrapCacheForTesting();
+  const urlFedUs = await resolveRdapBaseUrl('sub.dept.fed.us', mockFetch);
+  assert.equal(urlFedUs, 'https://rdap.fed.gov/');
+
+  clearRdapBootstrapCacheForTesting();
+});
+
+// 20. Invalid and Oversized Bootstrap Responses
+test('IANA Bootstrap: Handles oversized bootstrap response (> 1MB) safely and falls back', async () => {
+  clearRdapBootstrapCacheForTesting();
+  const oversizedData = 'x'.repeat(1048577);
+  const oversizedFetch: typeof fetch = async () => {
+    return new Response(oversizedData, {
+      status: 200,
+      headers: { 'Content-Type': 'application/json', 'Content-Length': '1048577' },
+    });
+  };
+
+  // Should not throw, should fall back to TLD default
+  const fallbackUrl = await resolveRdapBaseUrl('test.com', oversizedFetch);
+  assert.equal(fallbackUrl, 'https://rdap.verisign.com/com/v1/');
+  clearRdapBootstrapCacheForTesting();
+});
+
+test('IANA Bootstrap: Handles malformed and non-JSON bootstrap responses safely', async () => {
+  clearRdapBootstrapCacheForTesting();
+  const badJsonFetch: typeof fetch = async () => {
+    return new Response('<html>502 Bad Gateway</html>', { status: 502, headers: { 'Content-Type': 'text/html' } });
+  };
+
+  const fallbackUrl = await resolveRdapBaseUrl('test.org', badJsonFetch);
+  assert.equal(fallbackUrl, 'https://rdap.publicinterestregistry.org/rdap/');
+  clearRdapBootstrapCacheForTesting();
+
+  // Malformed structure (missing services)
+  const malformedStructureFetch: typeof fetch = async () => {
+    return new Response(JSON.stringify({ notServices: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  };
+  const fallbackUrl2 = await resolveRdapBaseUrl('test.net', malformedStructureFetch);
+  assert.equal(fallbackUrl2, 'https://rdap.verisign.com/com/v1/');
+  clearRdapBootstrapCacheForTesting();
+});
+
+// 21. Redirects to Private or Untrusted Destinations
+test('RDAP Security: Rejects redirects to HTTP (unencrypted downgrade)', async () => {
+  const redirectHttpFetch: typeof fetch = async (url) => {
+    const urlStr = url.toString();
+    if (urlStr.startsWith('https://')) {
+      return new Response(null, {
+        status: 302,
+        headers: { Location: 'http://insecure-rdap.example.org/domain/example.com' },
+      });
+    }
+    return new Response('Insecure response', { status: 200 });
+  };
+
+  const result = await performRdapLookup('example.com', redirectHttpFetch);
+  assert.equal(result.status, 'error');
+  assert.ok(result.message?.includes('Only HTTPS') || result.message?.includes('security policy'));
+});
+
+test('RDAP Security: Rejects redirects to loopback (127.0.0.1) and private IPs', async () => {
+  const loopbackTargets = [
+    'https://127.0.0.1/domain/example.com',
+    'https://localhost:8443/domain/example.com',
+    'https://169.254.169.254/latest/meta-data',
+    'https://192.168.1.1/domain/example.com',
+    'https://10.0.0.1/domain/example.com',
+  ];
+
+  for (const target of loopbackTargets) {
+    const redirectFetch: typeof fetch = async () => {
+      return new Response(null, {
+        status: 302,
+        headers: { Location: target },
+      });
+    };
+
+    const result = await performRdapLookup('example.com', redirectFetch);
+    assert.equal(result.status, 'error');
+    assert.ok(result.message?.includes('reserved') || result.message?.includes('private') || result.message?.includes('security policy'));
+  }
+});
+
+test('RDAP Security: Rejects redirects to domains resolving to private IPs (DNS rebinding)', async () => {
+  const rebindingResolver: DnsResolverInterface = {
+    resolve4: async (hostname) => {
+      if (hostname === 'rebind-rdap.attacker-registry.org') return ['127.0.0.1'];
+      return ['93.184.215.14'];
+    },
+    resolve6: async () => [],
+    resolveMx: async () => [],
+  };
+
+  const redirectFetch: typeof fetch = async () => {
+    return new Response(null, {
+      status: 302,
+      headers: { Location: 'https://rebind-rdap.attacker-registry.org/domain/example.com' },
+    });
+  };
+
+  const result = await performRdapLookup('example.com', redirectFetch, rebindingResolver);
+  assert.equal(result.status, 'error');
+  assert.ok(result.message?.includes('restricted') || result.message?.includes('security policy'));
+});
+
+test('RDAP Security: Follows valid HTTPS redirect to trustworthy endpoint', async () => {
+  let hop = 0;
+  const validRedirectFetch: typeof fetch = async (url) => {
+    hop++;
+    if (hop === 1) {
+      return new Response(null, {
+        status: 302,
+        headers: { Location: 'https://rdap.authoritative-registry.com/domain/example.com' },
+      });
+    }
+    return new Response(JSON.stringify({
+      events: [{ eventAction: 'registration', eventDate: '2018-03-20T00:00:00Z' }]
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  };
+
+  const safeResolver: DnsResolverInterface = {
+    resolve4: async () => ['93.184.215.14'],
+    resolve6: async () => [],
+    resolveMx: async () => [],
+  };
+
+  const result = await performRdapLookup('example.com', validRedirectFetch, safeResolver);
+  assert.equal(result.status, 'available');
+  assert.equal(result.registrationDate, '2018-03-20T00:00:00Z');
+  assert.equal(hop, 2);
+});
+
+test('RDAP Security: Aborts infinite redirect loop safely', async () => {
+  const infiniteLoopFetch: typeof fetch = async () => {
+    return new Response(null, {
+      status: 302,
+      headers: { Location: 'https://rdap.loop.example.com/domain/example.com' },
+    });
+  };
+
+  const safeResolver: DnsResolverInterface = {
+    resolve4: async () => ['93.184.215.14'],
+    resolve6: async () => [],
+    resolveMx: async () => [],
+  };
+
+  const result = await performRdapLookup('example.com', infiniteLoopFetch, safeResolver);
+  assert.equal(result.status, 'error');
+  assert.ok(result.message?.includes('redirect hops'));
+});
+
+// 22. Oversized RDAP Response Body Safety
+test('RDAP: Handles oversized RDAP response body safely (> 512KB)', async () => {
+  const oversizedData = 'a'.repeat(524289);
+  const oversizedFetch: typeof fetch = async () => {
+    return new Response(oversizedData, {
+      status: 200,
+      headers: { 'Content-Type': 'application/json', 'Content-Length': '524289' },
+    });
+  };
+
+  const result = await performRdapLookup('example.com', oversizedFetch);
+  assert.equal(result.status, 'error');
+  assert.ok(result.message?.includes('size limit'));
+});
+
 
 

@@ -222,7 +222,7 @@ export async function performDnsRecon(
   };
 }
 
-interface IanaRdapBootstrapJson {
+export interface IanaRdapBootstrapJson {
   version: string;
   publication: string;
   services: Array<[string[], string[]]>;
@@ -236,7 +236,13 @@ let bootstrapCache: {
   timestamp: 0,
 };
 
-async function getIanaRdapBootstrap(fetchFn: typeof fetch): Promise<IanaRdapBootstrapJson | null> {
+export function clearRdapBootstrapCacheForTesting(): void {
+  bootstrapCache = { data: null, timestamp: 0 };
+}
+
+export async function getIanaRdapBootstrap(
+  fetchFn: typeof fetch = fetch
+): Promise<IanaRdapBootstrapJson | null> {
   const now = Date.now();
   // Cache TTL: 24 hours
   if (bootstrapCache.data && now - bootstrapCache.timestamp < 86400000) {
@@ -247,14 +253,43 @@ async function getIanaRdapBootstrap(fetchFn: typeof fetch): Promise<IanaRdapBoot
     const res = await fetchFn('https://data.iana.org/rdap/dns.json', {
       method: 'GET',
       headers: { Accept: 'application/json' },
-      signal: AbortSignal.timeout(4000),
+      signal: AbortSignal.timeout(4000), // Strict 4-second timeout
     });
-    if (res.ok) {
-      const json = (await res.json()) as IanaRdapBootstrapJson;
-      if (json && Array.isArray(json.services)) {
-        bootstrapCache = { data: json, timestamp: now };
-        return json;
-      }
+
+    if (!res.ok) {
+      console.error(`Failed to fetch IANA RDAP bootstrap registry: HTTP ${res.status}`);
+      return bootstrapCache.data;
+    }
+
+    const contentLength = res.headers.get('content-length');
+    if (contentLength && parseInt(contentLength, 10) > 1048576) {
+      console.error(`IANA RDAP bootstrap response exceeded safety size limit (${contentLength} bytes).`);
+      return bootstrapCache.data;
+    }
+
+    const text = await res.text();
+    if (text.length > 1048576) {
+      console.error(`IANA RDAP bootstrap response body exceeded safety size limit (${text.length} chars).`);
+      return bootstrapCache.data;
+    }
+
+    const json = JSON.parse(text) as IanaRdapBootstrapJson;
+    if (
+      json &&
+      typeof json === 'object' &&
+      Array.isArray(json.services) &&
+      json.services.every(
+        (s) =>
+          Array.isArray(s) &&
+          s.length >= 2 &&
+          Array.isArray(s[0]) &&
+          Array.isArray(s[1])
+      )
+    ) {
+      bootstrapCache = { data: json, timestamp: now };
+      return json;
+    } else {
+      console.error('Invalid IANA RDAP bootstrap structure: services array is malformed.');
     }
   } catch (err) {
     console.error('Failed to fetch IANA RDAP bootstrap registry:', err instanceof Error ? err.message : 'Unknown');
@@ -263,7 +298,10 @@ async function getIanaRdapBootstrap(fetchFn: typeof fetch): Promise<IanaRdapBoot
   return bootstrapCache.data;
 }
 
-async function resolveRdapBaseUrl(domain: string, fetchFn: typeof fetch): Promise<string> {
+export async function resolveRdapBaseUrl(
+  domain: string,
+  fetchFn: typeof fetch = fetch
+): Promise<string> {
   const lowerDomain = domain.toLowerCase().trim();
   const labels = lowerDomain.split('.');
 
@@ -280,7 +318,9 @@ async function resolveRdapBaseUrl(domain: string, fetchFn: typeof fetch): Promis
           const tail = labels.slice(labels.length - tldParts.length);
           if (tail.join('.') === tldParts.join('.')) {
             if (tldParts.length > maxMatchedLength) {
-              const httpsUrl = baseUrlList.find((u) => typeof u === 'string' && u.startsWith('https://'));
+              const httpsUrl = baseUrlList.find(
+                (u) => typeof u === 'string' && u.startsWith('https://')
+              );
               if (httpsUrl) {
                 maxMatchedLength = tldParts.length;
                 bestMatchUrl = httpsUrl;
@@ -313,7 +353,88 @@ async function resolveRdapBaseUrl(domain: string, fetchFn: typeof fetch): Promis
     return 'https://rdap.educause.edu/rdap/';
   }
 
-  return 'https://rdap.org/domain/';
+  return 'https://rdap.org/';
+}
+
+/**
+ * Constructs the canonical RDAP resource path `/domain/{domain}`.
+ * Example: `{baseUrl}/domain/{domain}`.
+ */
+export function constructRdapQueryUrl(baseUrl: string, domain: string): string {
+  const cleanBase = baseUrl.trim().replace(/\/+$/, '');
+  const encodedDomain = encodeURIComponent(domain.trim().toLowerCase());
+  if (cleanBase.endsWith('/domain')) {
+    return `${cleanBase}/${encodedDomain}`;
+  }
+  return `${cleanBase}/domain/${encodedDomain}`;
+}
+
+/**
+ * Validates an outbound RDAP URL:
+ * - Strict HTTPS enforcement
+ * - Reject special-use, loopback, link-local, private, or reserved hostnames and IPs
+ * - DNS resolution check to mitigate DNS rebinding and private infrastructure access
+ */
+export async function validateRdapOutboundUrl(
+  urlStr: string,
+  resolver: DnsResolverInterface = defaultDnsResolver
+): Promise<{ valid: boolean; error?: string; url?: URL }> {
+  let parsed: URL;
+  try {
+    parsed = new URL(urlStr);
+  } catch {
+    return { valid: false, error: 'Malformed URL' };
+  }
+
+  if (parsed.protocol !== 'https:') {
+    return { valid: false, error: `Insecure protocol scheme "${parsed.protocol}". Only HTTPS is permitted for RDAP.` };
+  }
+
+  const hostname = parsed.hostname;
+  if (!hostname) {
+    return { valid: false, error: 'Missing hostname in RDAP destination' };
+  }
+
+  if (isSpecialUseHostname(hostname)) {
+    return { valid: false, error: `Destination host "${hostname}" is a reserved or special-use address.` };
+  }
+
+  if (isIpv4(hostname)) {
+    if (isSpecialUseIpv4(hostname)) {
+      return { valid: false, error: `Destination IP "${hostname}" is a private or reserved IPv4 address.` };
+    }
+    return { valid: true, url: parsed };
+  }
+
+  if (isIpv6(hostname)) {
+    if (isSpecialUseIpv6(hostname)) {
+      return { valid: false, error: `Destination IP "${hostname}" is a private or reserved IPv6 address.` };
+    }
+    return { valid: true, url: parsed };
+  }
+
+  try {
+    const [v4Result, v6Result] = await Promise.allSettled([
+      withTimeout(resolver.resolve4(hostname), 2000, 'RDAP host IPv4 lookup'),
+      withTimeout(resolver.resolve6(hostname), 2000, 'RDAP host IPv6 lookup'),
+    ]);
+
+    const v4Ips = v4Result.status === 'fulfilled' ? v4Result.value : [];
+    const v6Ips = v6Result.status === 'fulfilled' ? v6Result.value : [];
+    const allIps = [...v4Ips, ...v6Ips];
+
+    if (allIps.length > 0) {
+      for (const ip of allIps) {
+        if (isSpecialUseIpv4(ip) || isSpecialUseIpv6(ip)) {
+          return { valid: false, error: `Destination host "${hostname}" resolves to restricted address ${ip}.` };
+        }
+      }
+    }
+  } catch {
+    // If DNS check fails, network layer will handle resolution failure
+  }
+
+  return { valid: true, url: parsed };
 }
 
 /**
@@ -321,7 +442,8 @@ async function resolveRdapBaseUrl(domain: string, fetchFn: typeof fetch): Promis
  */
 export async function performRdapLookup(
   domain: string,
-  fetchFn: typeof fetch = fetch
+  fetchFn: typeof fetch = fetch,
+  resolver: DnsResolverInterface = defaultDnsResolver
 ): Promise<RdapRegistrationData> {
   // Validate domain format before constructing URL to prevent injection
   const trimmed = domain.trim().toLowerCase();
@@ -334,34 +456,87 @@ export async function performRdapLookup(
 
   // Resolve authoritative RDAP base URL via IANA DNS bootstrap registry (RFC 9224)
   const baseRdapUrl = await resolveRdapBaseUrl(trimmed, fetchFn);
-  const rdapEndpoint = `${baseRdapUrl.replace(/\/$/, '')}/${encodeURIComponent(trimmed)}`;
-  let endpointHostname = 'rdap.org';
-  try {
-    endpointHostname = new URL(rdapEndpoint).hostname;
-  } catch {}
+  const rdapEndpoint = constructRdapQueryUrl(baseRdapUrl, trimmed);
 
+  const MAX_REDIRECTS = 3;
+  let currentUrl = rdapEndpoint;
+  let redirectCount = 0;
   let response: Response;
-  try {
-    response = await fetchFn(rdapEndpoint, {
-      method: 'GET',
-      headers: {
-        Accept: 'application/rdap+json, application/json',
-      },
-      signal: AbortSignal.timeout(4000), // 4-second timeout
-    });
-  } catch (err: unknown) {
-    const isTimeout =
-      err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError');
-    const isDns = err instanceof Error && ('code' in err) && (err.code === 'ENOTFOUND' || err.code === 'EAI_AGAIN');
-    const failureCategory = isTimeout ? 'TIMEOUT' : isDns ? 'DNS_FAILURE' : 'NETWORK_FAILURE';
-    console.error(`RDAP diagnostic classification [${failureCategory}] for endpoint host ${endpointHostname}:`, err instanceof Error ? err.message : 'Unknown');
+  let endpointHostname = 'rdap.org';
 
-    return {
-      status: isTimeout ? 'timeout' : 'error',
-      message: isTimeout
-        ? 'RDAP request timed out after 4 seconds.'
-        : 'Unable to connect to RDAP service due to network or DNS failure.',
-    };
+  while (true) {
+    try {
+      endpointHostname = new URL(currentUrl).hostname;
+    } catch {}
+
+    const validation = await validateRdapOutboundUrl(currentUrl, resolver);
+    if (!validation.valid) {
+      console.error(`RDAP diagnostic classification [SECURITY_BLOCKED]: ${validation.error}`);
+      return {
+        status: 'error',
+        message: validation.error || 'RDAP request blocked by destination security policy.',
+      };
+    }
+
+    try {
+      response = await fetchFn(currentUrl, {
+        method: 'GET',
+        headers: {
+          Accept: 'application/rdap+json, application/json',
+        },
+        redirect: 'manual',
+        signal: AbortSignal.timeout(4000), // 4-second timeout
+      });
+    } catch (err: unknown) {
+      const isTimeout =
+        err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError');
+      const isDns = err instanceof Error && ('code' in err) && (err.code === 'ENOTFOUND' || err.code === 'EAI_AGAIN');
+      const failureCategory = isTimeout ? 'TIMEOUT' : isDns ? 'DNS_FAILURE' : 'NETWORK_FAILURE';
+      console.error(`RDAP diagnostic classification [${failureCategory}] for endpoint host ${endpointHostname}:`, err instanceof Error ? err.message : 'Unknown');
+
+      return {
+        status: isTimeout ? 'timeout' : 'error',
+        message: isTimeout
+          ? 'RDAP request timed out after 4 seconds.'
+          : 'Unable to connect to RDAP service due to network or DNS failure.',
+      };
+    }
+
+    // Manual redirect handling: validate every redirect target before following it
+    if ([301, 302, 303, 307, 308].includes(response.status)) {
+      const location = response.headers.get('location');
+      if (!location) {
+        console.error(`RDAP diagnostic classification [REDIRECT_ERROR]: endpoint host ${endpointHostname}, missing Location header`);
+        return {
+          status: 'error',
+          message: 'RDAP server returned redirect without Location header.',
+        };
+      }
+
+      redirectCount++;
+      if (redirectCount > MAX_REDIRECTS) {
+        console.error(`RDAP diagnostic classification [REDIRECT_LIMIT_EXCEEDED]: endpoint host ${endpointHostname}`);
+        return {
+          status: 'error',
+          message: 'RDAP lookup exceeded maximum redirect hops.',
+        };
+      }
+
+      try {
+        const nextUrl = new URL(location, currentUrl);
+        currentUrl = nextUrl.href;
+        continue;
+      } catch {
+        console.error(`RDAP diagnostic classification [INVALID_REDIRECT_URL]: endpoint host ${endpointHostname}, Location: ${location}`);
+        return {
+          status: 'error',
+          message: 'RDAP server returned invalid redirect location.',
+        };
+      }
+    }
+
+    // Not a redirect - break loop and process response
+    break;
   }
 
   const httpStatus = response.status;
@@ -393,9 +568,28 @@ export async function performRdapLookup(
     };
   }
 
+  let text: string;
+  try {
+    text = await response.text();
+  } catch (err: unknown) {
+    console.error(`RDAP diagnostic classification [NETWORK_FAILURE]: endpoint host ${endpointHostname}`, err instanceof Error ? err.message : '');
+    return {
+      status: 'error',
+      message: 'Unable to read RDAP response.',
+    };
+  }
+
+  if (text.length > 524288) {
+    console.error(`RDAP diagnostic classification [SIZE_LIMIT_EXCEEDED]: endpoint host ${endpointHostname}, body length: ${text.length}`);
+    return {
+      status: 'error',
+      message: 'RDAP response exceeded safety size limit.',
+    };
+  }
+
   let json: unknown;
   try {
-    json = await response.json();
+    json = JSON.parse(text);
   } catch (err: unknown) {
     console.error(`RDAP diagnostic classification [MALFORMED_JSON]: endpoint host ${endpointHostname}, Content-Type: ${contentType}`, err instanceof Error ? err.message : '');
     return {
@@ -681,7 +875,7 @@ export async function performFullRecon(
   // Domain lookup: Run DNS and RDAP concurrently
   const [dnsData, rdapData] = await Promise.all([
     performDnsRecon(hostname, resolver),
-    performRdapLookup(hostname, fetchFn),
+    performRdapLookup(hostname, fetchFn, resolver),
   ]);
 
   // SSRF guard on resolved IP addresses: Check if ANY resolved IP is private/loopback
